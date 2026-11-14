@@ -8,9 +8,7 @@
 
 ## 시작 조건 (전부 참이어야 함)
 
-- [ ] 빵모아 사이트(`breadmoa.com`)가 서버 없이 도는 상태: Vercel 에서 `VITE_API_BASE` 삭제 + Redeploy 끝
-- [ ] 배포된 화면 코드에 `api.breadmoa.com` 없음 (배포 JS 에서 문자열 검색)
-- [ ] `breadmoa.com` 에서 관광 목록 · 지도 검색 · 길찾기 동작
+- [ ] 지형님이 **감수**함: 빵모아 사이트(`breadmoa.com`, Vercel)는 지형님 배포가 아니라 건드리지 않음. 사이트는 계속 열리지만 **서버를 부르던 부분(관광 목록 · 지도 검색 · 길찾기)은 서버 종료와 함께 끊김**. 날짜와 함께 한 줄 기록: `YYYY-MM-DD 빵모아 서버 종료, 사이트의 서버 호출 부분은 끊김(감수)`
 - [ ] 로컬 백업이 있음: `C:\Users\user\backups\bbangmoa_1112\` (`MANIFEST.txt` 의 SHA-256 과 현재 파일이 같음)
 - [ ] 지형님이 종료 날짜를 정하고 OK
 
@@ -19,7 +17,7 @@
 | # | 할 일 | 누가 | 되돌림 | 확인 |
 |---|---|---|---|---|
 | 1 | 빵모아 서버 레포의 배포 워크플로 끄기 (`gh workflow disable`, `vmgfh878-art/bbangmoa-server`) | 세션 | 가능 (enable) | 워크플로 상태 disabled |
-| 2 | Cloudflare `breadmoa.com` → DNS → `api` 레코드 삭제 | 지형님 | 가능(레코드 다시 추가, 단 옛 IP 는 8 이후 못 돌려받음) | `dig api.breadmoa.com` 응답 없음 |
+| 2 | Cloudflare `breadmoa.com` → DNS → `api` 레코드 삭제 | 지형님 | 가능(레코드 다시 추가, 단 옛 IP 는 5 이후 못 돌려받음) | `dig api.breadmoa.com` 응답 없음 |
 | 3 | (선택) 인스턴스 **중지(Stop)** 로 며칠 두기 — 중지 중에도 EBS 요금은 나감 | 지형님 | 가능(시작) | 상태 stopped, 사이트는 정상 |
 | 4 | 인스턴스 **종료(Terminate)** — 종료 전에 루트 볼륨의 "종료 시 삭제"가 켜져 있는지 확인(기본 켜짐). 꺼져 있으면 볼륨을 따로 삭제 | 지형님 | **되돌릴 수 없음** (인스턴스 안 데이터 · docker 이미지 · 인증서 비밀키가 사라짐) | 상태 terminated, 볼륨 목록에 옛 것 없음 |
 | 5 | 옛 **탄력적 IP 해제**(Release). 인스턴스에 붙은 탄력적 IP 가 있었으면 연결 해제 → 해제. 자동 할당 IP 였으면 종료 때 같이 사라짐 | 지형님 | **되돌릴 수 없음** (같은 IP 를 다시 못 받음) | 탄력적 IP 목록에 옛 IP 없음 |
@@ -42,12 +40,12 @@
 
 ## 안 건드리는 것 (사이트가 계속 씀)
 
-`breadmoa.com` 도메인 · Vercel 프로젝트 · 빵모아 Supabase · 빵모아 외부 API 키(관광공사 · 카카오 · ODSAY · TMAP). 사이트를 내릴 때 따로 정함.
+`breadmoa.com` 도메인 · Vercel 프로젝트(지형님 배포가 아님, `VITE_API_BASE` 도 손대지 않음) · 빵모아 Supabase · 빵모아 외부 API 키(관광공사 · 카카오 · ODSAY · TMAP). 사이트를 내릴 때 따로 정함.
 
 ## 끝 확인 (증거)
 
 - `dig api.breadmoa.com` 응답 없음
 - 콘솔 인스턴스 목록에서 옛 인스턴스 `terminated` (이후 목록에서 사라짐)
 - 탄력적 IP · 보안 그룹 · 키 페어 · AMI · 스냅샷 목록에 옛 것 없음
-- `breadmoa.com` 관광 목록 · 지도 검색 · 길찾기 동작
+- `breadmoa.com` 사이트 자체는 열림 (서버를 부르던 부분은 끊김 — 시작 조건의 감수 기록)
 - 빵모아 서버 레포: README 종료 기록 머지 · Secrets 삭제 · 보관됨
