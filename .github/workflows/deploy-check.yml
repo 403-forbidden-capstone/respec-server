@@ -1,0 +1,24 @@
+# deploy/ 의 스크립트 · 설정을 바꾸는 PR 에서만 돎 (Actions 분 아낌). 로컬과 같은 명령: bash deploy/tests/run.sh
+# 내용: bash 문법 · shellcheck · 줄바꿈 / check-env · smoke(가짜 서버) · deploy(가짜 docker) 시험 / compose 정책 / nginx 문법(nginx 1.24 컨테이너)
+name: deploy-check
+
+on:
+  pull_request:
+    paths:
+      - "deploy/**"
+      - ".env.example"
+      - ".github/workflows/deploy.yml"
+      - ".github/workflows/deploy-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 배포 스크립트 · 설정 시험
+        run: bash deploy/tests/run.sh

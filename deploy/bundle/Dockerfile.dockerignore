@@ -1,0 +1,4 @@
+*
+!deploy/compose.yml
+!deploy/versions.env
+!.env.example

@@ -1,0 +1,119 @@
+# main 에 머지되면: arm64 이미지 빌드 → GHCR 업로드 → 서버에 SSH 로 "deploy <태그>" 한 줄.
+# 서버의 deploy.sh 가 번들 이미지에서 compose 를 꺼내 교체하고, 배포 직후 점검에 실패하면 직전 버전으로 되돌림.
+#
+# 켜고 끄는 스위치: 저장소 변수 DEPLOY_ENABLED (Settings → Secrets and variables → Actions → Variables)
+#   true 일 때만 돎. 서버가 준비되기 전 · 데모 앞뒤 배포 동결 기간에는 비워 두거나 false.
+# 필요한 Secrets: EC2_HOST · EC2_USER(deploy) · EC2_SSH_KEY(deploy 전용 열쇠, 강제 명령이라 deploy.sh 만 실행 가능)
+# 선택 변수 EC2_KNOWN_HOSTS: 서버의 호스트 키 줄(ssh-keyscan 출력). 있으면 그걸로 서버를 검증, 없으면 배포 때 ssh-keyscan 으로 받음
+# Actions 분이 막히면: deploy/build-push.sh (PC 에서 빌드 → 같은 deploy <태그> 명령)
+#
+# 보안 경계(정직하게): `if: github.ref == main` 은 보안 장치가 아님 — 브랜치에 올린 워크플로는 자기 파일을 쓰므로 이 조건을 안 따름.
+#   막는 것: 열쇠(EC2_SSH_KEY)가 밖으로 새도 그 열쇠로는 deploy 태그만 보낼 수 있고, 서버는 번들 compose 가 정책을 통과해야 올림(서버 root 불가).
+#   못 막는 것: 이 레포에서 워크플로를 돌릴 수 있는 사람(packages: write)이 이미지에 코드를 넣어 올리는 것. 완전히 막으려면
+#   main 보호 + Environment 가 필요한데 무료 조직의 private 레포에는 없음(레포를 public 으로 하거나 유료 플랜) — deploy/server-setup.md 11절
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "api/**"
+      - "deploy/**"
+      - ".env.example"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false # 배포 도중에 끊지 않음
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  build:
+    if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm # 서버(t4g, arm64)와 같은 종류라 에뮬레이션 없이 빠르게 빌드
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: GHCR 로그인
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: api 이미지 빌드 · 업로드
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          test -f api/Dockerfile || { echo "::error::api/Dockerfile 이 없음 (서버 뼈대 PR 이 먼저 머지돼야 함)"; exit 1; }
+          docker build -f api/Dockerfile \
+            --label "org.opencontainers.image.source=$SOURCE" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t "$REGISTRY/respec-api:$TAG" api
+          docker push "$REGISTRY/respec-api:$TAG"
+
+      # compose · 이미지 버전 고정 · .env.example 을 담은 번들. 서버는 SSH 로 태그만 받고 compose 는 이 이미지에서 꺼냄
+      - name: 배포 번들 이미지 빌드 · 업로드
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          docker build -f deploy/bundle/Dockerfile \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t "$REGISTRY/respec-deploy:$TAG" .
+          docker push "$REGISTRY/respec-deploy:$TAG"
+
+  deploy:
+    needs: build
+    if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: SSH 열쇠 · 서버 확인 준비
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ vars.EC2_KNOWN_HOSTS }}
+        run: |
+          : "${EC2_HOST:?Secret EC2_HOST 가 비어 있음}"
+          : "${EC2_SSH_KEY:?Secret EC2_SSH_KEY 가 비어 있음}"
+          install -m 700 -d ~/.ssh
+          umask 077
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          if [ -n "$EC2_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::EC2_KNOWN_HOSTS 변수가 없어 ssh-keyscan 으로 서버 키를 받음 (처음 한 번 변수로 고정하면 더 안전)"
+            ssh-keyscan -t ed25519 "$EC2_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: 서버에서 배포 (실패하면 서버가 직전 버전으로 되돌리고 이 단계가 실패로 끝남)
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          # 서버의 강제 명령(deploy.sh)은 "deploy sha-<16진수>" · rollback · status 만 받음
+          # ServerAlive: 이미지를 받는 동안 출력이 없어도 연결을 유지(서버 쪽 worker 는 연결이 끊겨도 끝까지 돌지만, 결과는 이 단계에서 봄)
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            "$EC2_USER@$EC2_HOST" "deploy $TAG"
+
+      - name: 열쇠 지우기
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

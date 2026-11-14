@@ -1,0 +1,83 @@
+# 실서버 compose. 서버의 /srv/respec/compose.yml 로 deploy.sh 가 번들 이미지에서 꺼내 놓음 (손으로 안 고침).
+# 로컬 개발용은 compose.local.yml (FastAPI 세션 몫).
+#
+# 규칙
+#   - 포트는 전부 127.0.0.1 에만 엶 (Docker 가 ufw 를 건너뛰므로 밖에는 nginx 만 노출)
+#   - mem_limit 합계 1.1GB 이하 (OS · Docker · nginx 몫 0.4GB 남김). 실측 뒤 조정
+#   - prepare-ml 은 profile `ml` — 모델 파일이 올라가고 deploy.env 에 COMPOSE_PROFILES=ml 을 넣은 뒤에만 켜짐
+name: respec
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-api-image: &api-image ghcr.io/403-forbidden-capstone/respec-api:${API_TAG:?API_TAG 가 비어 있음 (deploy.env)}
+
+services:
+  api:
+    image: *api-image
+    restart: unless-stopped
+    # init: true = 작은 init(tini)이 PID 1. 파이썬이 PID 1 이면 SIGTERM 을 무시해 매번 종료가 30초 뒤 강제 종료(SIGKILL)로 끝남
+    init: true
+    env_file: ./api.env
+    environment:
+      APP_VERSION: ${API_TAG}
+    ports:
+      - "127.0.0.1:8000:8000"
+    mem_limit: 300m
+    # 저장 중 재시작에 대비해 종료 신호 뒤 30초 기다림
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    # slim 이미지엔 curl 이 없어서 파이썬 표준 라이브러리로 확인
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+
+  # api 와 같은 이미지, 다른 시작 명령. 예약 작업만 돌고 프로세스는 1개 (워커를 늘려도 작업이 겹치지 않게 분리)
+  scheduler:
+    image: *api-image
+    restart: unless-stopped
+    # (init: true — 위와 같은 이유)
+    init: true
+    command: ["python", "-m", "app.scheduler"]
+    env_file: ./api.env
+    environment:
+      APP_VERSION: ${API_TAG}
+    mem_limit: 256m
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  prepare-ml:
+    profiles: ["ml"]
+    image: ghcr.io/403-forbidden-capstone/respec-prepare-ml:${ML_TAG:-none}
+    restart: unless-stopped
+    # (init: true — 위와 같은 이유)
+    init: true
+    env_file: ./ml.env
+    environment:
+      CATBOOST_MODEL_DIR: /app/models/v4_age_only
+      PORT: "8091"
+    volumes:
+      # 모델 파일(.cbm)은 깃 · 이미지에 없음. 서버의 읽기 전용 폴더를 붙임. 폴더가 없으면 시작 실패 (create_host_path: false)
+      - type: bind
+        source: ./models/v4_age_only
+        target: /app/models/v4_age_only
+        read_only: true
+        bind:
+          create_host_path: false
+    ports:
+      - "127.0.0.1:8091:8091"
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    # 헬스체크는 이미지에 들어 있음(두 모델이 다 올라와야 healthy)
+    logging: *default-logging
