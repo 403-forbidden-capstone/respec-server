@@ -67,6 +67,12 @@ OS 판 차이: Ubuntu 26.04 의 `sudo` 는 Rust 로 다시 쓴 `sudo-rs` 라서,
 하는 일: apt 업그레이드 · docker-ce(공식 저장소, 버전 hold) · docker 로그 크기 제한 · swap 2GB · ufw(22 · 80 · 443) · fail2ban · ssh 강화(비밀번호 · root 로그인 끔) · nginx · certbot · `deploy` 계정(강제 명령) · `/srv/respec` · env 이름 틀(값 비어 있음) · 보안 업데이트 자동(자동 재부팅 끔).
 안 하는 것: 재부팅 · 컨테이너 시작 · 모델 파일 · ghcr 로그인 · 인증서 발급. 끝에 "재부팅이 필요함"이 나오면 지형님 OK 뒤에 따로 재부팅.
 
+**알아 둘 것 (11/14 새 서버 26.04 에서 실제로 돌려 본 결과)**
+
+- `/tmp` 는 재부팅하면 비워짐 → 재부팅 뒤에 `bootstrap.sh` 를 다시 돌릴 때는 위 `scp` 를 다시 함(서버에 스크립트가 없으면 종료 코드 127).
+- 업그레이드가 끝나도 `apt list --upgradable` 에 몇 개가 남을 수 있음: 새 커널(`linux-aws`)은 `apt upgrade` 가 보류하고, 일부는 Ubuntu 단계 배포(phased)라 시간이 지나야 들어옴. 커널은 보안 자동 업데이트(`unattended-upgrades`)가 설치하지만 자동 재부팅을 껐으므로 `*** System restart required ***` 가 뜨면 조용한 시간에 지형님 OK 뒤 재부팅.
+- Ubuntu 26.04 의 `/etc/nginx/nginx.conf` 는 http 수준에 `server_tokens` 를 이미 적어 둠 → 우리 설정은 server 블록마다 `server_tokens off;` (공통 설정에 두면 duplicate 로 `nginx -t` 실패).
+
 끝났을 때 보이는 것: 맨 아래 요약 표에 docker · compose 버전, hold 목록, swap 2G, ufw active, nginx · fail2ban active.
 
 ## 3. env 값 채우기 (지형님, 값은 채팅에 안 붙임)
