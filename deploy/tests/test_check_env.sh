@@ -110,6 +110,10 @@ assert_eq "ml.env 틀" "CATBOOST_API_TOKEN=" "$OUT"
 OUT=$("$CHECK" --print-skeleton api.env --example "$EXAMPLE")
 assert_contains "api.env 틀에 SUPABASE_SECRET_KEY" "$OUT" "SUPABASE_SECRET_KEY="
 assert_not_contains "틀에는 값이 없음" "$OUT" "SUPABASE_URL=h"
+# 선택 이름은 주석으로: "이름=" 빈 값이 그대로 컨테이너에 들어가 앱의 숫자 · 주소 읽기를 깨뜨리지 않게
+assert_contains "선택 이름은 주석 줄" "$OUT" "# HEALTH_DEEP_CACHE_SECONDS="
+assert_contains "선택 이름은 주석 줄(PREPARE_ML_URL)" "$OUT" "# PREPARE_ML_URL="
+assert_eq "빈 값 줄은 필수 이름만" "" "$(printf '%s\n' "$OUT" | grep -E '^(HEALTH_DEEP_CACHE_SECONDS|PREPARE_ML_URL|DATABASE_URL|EXPO_ACCESS_TOKEN|PREPARE_ML_API_TOKEN)=' || true)"
 
 echo "[9] 예시 파일이 없으면 종료 코드 2"
 RC=0

@@ -236,7 +236,7 @@ install -d -m 0755 -o root -g root "$APP_DIR/models" "$APP_DIR/models/v4_age_onl
 
 # 번들 이미지가 오기 전 임시 예시 (첫 배포가 이 파일을 번들 것으로 갈아 놓음)
 if [[ ! -f $APP_DIR/env.example ]]; then install -m 0644 -o deploy -g deploy "$EXAMPLE_SRC" "$APP_DIR/env.example"; fi
-# env 틀: 이름만 있고 값은 비어 있음. 이미 있으면 절대 안 건드림 (값이 들어 있을 수 있음)
+# env 틀: 필수 이름만 "이름=" 으로 비어 있고 선택 이름은 "# 이름=" 주석(빈 값이 컨테이너에 들어가지 않게). 이미 있으면 절대 안 건드림 (값이 들어 있을 수 있음)
 for f in api.env ml.env deploy.env smoke.env; do
   if [[ ! -f $APP_DIR/$f ]]; then
     "$LIB_DIR/check-env.sh" --print-skeleton "$f" --example "$EXAMPLE_SRC" >"$APP_DIR/$f"

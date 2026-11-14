@@ -3,7 +3,7 @@
 # 값은 어떤 경우에도 출력하지 않음 (이름과 비어 있는지만 봄).
 #
 #   check-env.sh [--dir /srv/respec] [--example 파일] [--strict] [--quiet]
-#   check-env.sh --print-skeleton api.env [--example 파일]      이름만 있는 빈 틀을 출력
+#   check-env.sh --print-skeleton api.env [--example 파일]      이름만 있는 빈 틀을 출력 (선택 이름은 "# 이름=" 주석)
 #
 # 판정
 #   실패: 파일 없음 · 권한이 600 이 아님 · 필수 이름이 없음(MISSING) · 필수 값이 비어 있음(EMPTY)
@@ -66,7 +66,11 @@ value_empty() {
 }
 
 if [[ -n $SKELETON ]]; then
-  example_names "$SKELETON" | cut -f1 | sed 's/$/=/'
+  # 필수 이름은 "이름=", 선택 이름은 "# 이름="(주석)으로 출력함 — 빈 값 "이름=" 이 컨테이너에 빈 문자열로 들어가
+  # 앱의 설정 읽기(숫자 · 주소 형식)가 깨지는 것을 막음. 선택 값이 필요해지면 # 를 지우고 값을 넣음
+  while IFS=$'\t' read -r name opt; do
+    if [[ $opt == 1 ]]; then printf '# %s=\n' "$name"; else printf '%s=\n' "$name"; fi
+  done < <(example_names "$SKELETON")
   exit 0
 fi
 
