@@ -1,0 +1,4 @@
+# shellcheck 설정: source 한 파일을 따라가고, 시험 · 스크립트에서 일부러 쓰는 패턴은 끔
+external-sources=true
+# SC1091: /etc/os-release 같은 서버 파일은 여기엔 없음 / SC2016: 홑따옴표 안 $ 는 일부러(패턴 · 서버에서 펼쳐질 것)
+disable=SC1091,SC2016

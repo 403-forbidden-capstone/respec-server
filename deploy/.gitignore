@@ -1,0 +1,7 @@
+# 비밀값은 깃에 올리지 않음. 이름 목록은 루트 .env.example, 배포 태그 고정은 versions.env(비밀 아님)만 예외.
+*.env
+!versions.env
+*.pem
+*.key
+id_*
+*.dump
