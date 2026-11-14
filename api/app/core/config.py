@@ -3,15 +3,18 @@
 env 이름 목록은 PR 설명에 있음 (`.env.example`은 AWS 세션이 이 목록에 맞춤).
 """
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     # hide_input_in_errors: 설정이 틀려 기동이 실패해도 오류 글에 입력값(키 일부 등)이 안 찍히게
-    model_config = SettingsConfigDict(env_file=None, extra="ignore", hide_input_in_errors=True)
+    # env_ignore_empty: 빈 문자열 env는 "없음"으로 봄 (compose가 값이 빈 선택 변수를 빈 문자열로 넣어도 기본값이 쓰이고, 숫자 칸이 파싱 오류로 죽지 않게)
+    model_config = SettingsConfigDict(
+        env_file=None, extra="ignore", hide_input_in_errors=True, env_ignore_empty=True
+    )
 
-    # Supabase 프로젝트 주소 (예: https://<ref>.supabase.co, 로컬은 http://127.0.0.1:54321)
+    # Supabase 프로젝트 주소 (예: https://<ref>.supabase.co, 로컬은 docs/local-dev.md의 격리 스택 http://127.0.0.1:28321)
     supabase_url: str
     # 토큰의 iss · JWKS 주소를 supabase_url과 다르게 줘야 할 때만 (로컬 compose: 컨테이너가 부르는 주소 ≠ 토큰에 찍힌 주소)
     supabase_jwt_issuer: str | None = None
@@ -32,7 +35,18 @@ class Settings(BaseSettings):
     health_require_scheduler: bool = False
     scheduler_stale_minutes: int = 15
 
+    # 배포 태그(sha-…). compose가 api · scheduler 컨테이너에 APP_VERSION으로 넣어 줌 → /health 응답의 version (배포 직후 점검이 읽음)
+    app_version: str = "dev"
+    # /health/deep 결과를 이 시간(초) 동안 재사용 (토큰 없이 부를 때마다 서버 키로 DB를 부르는 것을 줄임). 0이면 캐시만 끔
+    # (확인 자체는 한 번에 하나씩 순서대로 함). inf면 장애를 못 보고 nan · 음수는 캐시가 조용히 꺼지므로 0~60초만 받음
+    health_deep_cache_seconds: float = Field(5.0, ge=0, le=60, allow_inf_nan=False)
+
     log_level: str = "INFO"
+
+    @field_validator("app_version")
+    @classmethod
+    def _app_version(cls, value: str) -> str:
+        return value.strip()[:64] or "dev"
 
     @field_validator("log_level")
     @classmethod

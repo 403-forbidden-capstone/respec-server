@@ -12,7 +12,7 @@ def _iso(minutes_ago: float) -> str:
 def test_health_is_200_without_token_and_calls_nothing_external(client, fake):
     res = client.get("/health")
     assert res.status_code == 200
-    assert res.json() == {"status": "ok"}
+    assert res.json() == {"status": "ok", "version": "dev"}
     assert fake.jwks_calls == 0 and fake.rest_requests == []  # 프로세스만 확인
 
 

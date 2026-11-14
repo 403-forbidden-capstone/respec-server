@@ -94,6 +94,7 @@ def make_settings(**overrides) -> Settings:
         "supabase_url": SUPABASE_URL,
         "supabase_secret_key": "sb_secret_test_value",
         "jwks_min_refetch_seconds": 30,
+        "health_deep_cache_seconds": 0,  # 기존 시험은 매번 새로 확인. 캐시 시험은 test_deploy_contract.py
     }
     return Settings(**{**base, **overrides})
 

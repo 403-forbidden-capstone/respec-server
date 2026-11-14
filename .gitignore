@@ -7,3 +7,5 @@ __pycache__/
 .env.local
 *.env
 !.env.example
+# 로컬 격리 Supabase 작업 폴더(서명 키 · 로컬 키가 들어감) — dev/local_stack.py가 만듦
+dev/.stack/

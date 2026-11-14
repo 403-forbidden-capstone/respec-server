@@ -28,8 +28,8 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: api/uv.lock
-      - name: 의존성 (uv.lock 그대로 — 잠금 파일이 낡았으면 여기서 실패)
-        run: uv sync --frozen
+      - name: 의존성 (uv.lock 그대로 — pyproject.toml과 어긋나 잠금 파일이 낡았으면 여기서 실패)
+        run: uv sync --locked
       - name: ruff 코드 검사
         run: uv run ruff check .
       - name: ruff 모양 검사

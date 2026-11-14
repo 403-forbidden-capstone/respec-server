@@ -1,0 +1,13 @@
+# Docker는 패턴을 build context 맨 위 경로 기준으로 봄 — 하위 폴더(app/ 아래 등)까지 막으려면 **/ 가 필요함
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+tests
+README.md
+**/.env
+**/.env.*
+**/*.env
+Dockerfile
+.dockerignore
