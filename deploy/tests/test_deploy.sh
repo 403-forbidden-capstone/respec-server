@@ -38,7 +38,7 @@ docker() {
       tag=${src%%:*}
       tag=${tag#cid-}
       file=${src#*:}
-      cp "$BUNDLES/$tag$file" "$dest"
+      cp -P "$BUNDLES/$tag$file" "$dest" # -P: 링크는 링크 그대로 (진짜 docker cp 와 같음)
       ;;
     rm) ;;
     inspect)
@@ -296,6 +296,20 @@ echo "NOPE=1" >"$BUNDLES/sha-aaaaaaa/versions.env"
 run_main deploy sha-aaaaaaa
 assert_rc "종료 코드 1" 1 "$RC"
 assert_contains "문구" "$OUT" "ML_TAG 가 없음"
+
+echo "[7d2] 번들 파일이 심볼릭 링크면 교체 전에 중단 (링크를 따라 서버의 다른 파일을 읽지 않게)"
+setup
+make_bundle sha-aaaaaaa
+rm "$BUNDLES/sha-aaaaaaa/env.example"
+ln -s /etc/passwd "$BUNDLES/sha-aaaaaaa/env.example" 2>/dev/null || true
+if [[ ! -L $BUNDLES/sha-aaaaaaa/env.example ]]; then
+  echo "  skip 이 환경은 심볼릭 링크를 못 만듦(Windows Git Bash) — Linux(CI)에서 돎"
+else
+  run_main deploy sha-aaaaaaa
+  assert_rc "종료 코드 1" 1 "$RC"
+  assert_contains "문구" "$OUT" "번들 거부: env.example"
+  assert_not_contains "교체(up)를 안 함" "$(calls)" "up API_TAG"
+fi
 
 echo "[7e] 번들 compose 가 정책을 어기면(호스트 마운트 · 특권 · 포트 공개) 교체 전에 중단"
 setup

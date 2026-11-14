@@ -225,10 +225,10 @@ fi
 usermod -aG docker deploy
 
 install -d -m 0755 -o root -g root "$LIB_DIR"
-install_if_changed 0755 root:root "$SRC_DIR/deploy.sh" "$LIB_DIR/deploy.sh" && note "deploy.sh 설치(갱신)" || true
-install_if_changed 0755 root:root "$SRC_DIR/smoke.sh" "$LIB_DIR/smoke.sh" && note "smoke.sh 설치(갱신)" || true
-install_if_changed 0755 root:root "$SRC_DIR/check-env.sh" "$LIB_DIR/check-env.sh" && note "check-env.sh 설치(갱신)" || true
-install_if_changed 0644 root:root "$SRC_DIR/compose-policy.py" "$LIB_DIR/compose-policy.py" && note "compose-policy.py 설치(갱신)" || true
+if install_if_changed 0755 root:root "$SRC_DIR/deploy.sh" "$LIB_DIR/deploy.sh"; then note "deploy.sh 설치(갱신)"; fi
+if install_if_changed 0755 root:root "$SRC_DIR/smoke.sh" "$LIB_DIR/smoke.sh"; then note "smoke.sh 설치(갱신)"; fi
+if install_if_changed 0755 root:root "$SRC_DIR/check-env.sh" "$LIB_DIR/check-env.sh"; then note "check-env.sh 설치(갱신)"; fi
+if install_if_changed 0644 root:root "$SRC_DIR/compose-policy.py" "$LIB_DIR/compose-policy.py"; then note "compose-policy.py 설치(갱신)"; fi
 
 install -d -m 0750 -o deploy -g deploy "$APP_DIR"
 # 모델 파일 폴더: root 소유 읽기 전용 (컨테이너에는 읽기 전용으로 붙음). 파일은 1-11 에서 올림
@@ -274,7 +274,7 @@ fi
 # ---------------------------------------------------------------- 6 nginx · certbot
 step "6 nginx · certbot"
 install -d -m 0755 "$WEBROOT"
-install_if_changed 0644 root:root "$SRC_DIR/nginx/respec-global.conf" /etc/nginx/conf.d/respec-global.conf && note "respec-global.conf 설치(갱신)" || true
+if install_if_changed 0644 root:root "$SRC_DIR/nginx/respec-global.conf" /etc/nginx/conf.d/respec-global.conf; then note "respec-global.conf 설치(갱신)"; fi
 rm -f /etc/nginx/sites-enabled/default
 
 CERT=/etc/letsencrypt/live/$DOMAIN/fullchain.pem
@@ -309,7 +309,7 @@ else
   nginx_src=respec-api.http.conf
   note "인증서 없음 → nginx 는 HTTP 모양(80 번, 503 응답). 발급은 DNS 연결 뒤 --issue-cert"
 fi
-install_if_changed 0644 root:root "$SRC_DIR/nginx/$nginx_src" /etc/nginx/sites-available/respec-api && note "nginx 사이트 갱신: $nginx_src" || true
+if install_if_changed 0644 root:root "$SRC_DIR/nginx/$nginx_src" /etc/nginx/sites-available/respec-api; then note "nginx 사이트 갱신: $nginx_src"; fi
 ln -sf /etc/nginx/sites-available/respec-api /etc/nginx/sites-enabled/respec-api
 nginx -t
 systemctl enable nginx >/dev/null

@@ -80,6 +80,11 @@ mutate() { # mutate 이름 "sed 식" → 정책이 위반 문구로 거부해야
   assert_not_contains "  └ compose 가 깨진 게 아니라 정책이 잡음: $1" "$res" "JSON 으로 읽지 못함"
 }
 mutate "포트를 0.0.0.0 으로 열기" 's#"127.0.0.1:8000:8000"#"8000:8000"#'
+mutate "기본 네트워크 driver 바꾸기" 's#^name: respec$#name: respec\nnetworks:\n  default:\n    driver: macvlan#'
+mutate "기본 네트워크 driver_opts" 's#^name: respec$#name: respec\nnetworks:\n  default:\n    driver_opts:\n      com.docker.network.bridge.host_binding_ipv4: 0.0.0.0#'
+mutate "기본 네트워크 ipam 설정" 's#^name: respec$#name: respec\nnetworks:\n  default:\n    ipam:\n      config:\n        - subnet: 10.9.0.0/24#'
+mutate "기본 네트워크 external" 's#^name: respec$#name: respec\nnetworks:\n  default:\n    external: true\n    name: bridge#'
+mutate "기본 네트워크 이름을 host 로" 's#^name: respec$#name: respec\nnetworks:\n  default:\n    name: host#'
 mutate "mem_limit 을 키워 합계 초과" 's#mem_limit: 300m#mem_limit: 900m#'
 mutate "restart 를 always 로" '0,/restart: unless-stopped/s//restart: always/'
 mutate "environment 에 비밀 이름 직접 넣기" 's#APP_VERSION: ${API_TAG}#SUPABASE_SECRET_KEY: abc#'

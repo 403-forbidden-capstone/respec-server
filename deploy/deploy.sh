@@ -141,6 +141,15 @@ extract_bundle() { # → $APP_DIR/.next/{compose.yml,versions.env,env.example}
     return 1
   fi
   docker rm "$cid" >/dev/null 2>&1 || true
+  # docker cp 는 이미지 안의 심볼릭 링크를 링크 그대로 꺼내므로, compose 가 서버의 다른 파일(예: 비밀 파일)을 따라 읽지 않게
+  # 꺼낸 것은 일반 파일만 받음
+  local f
+  for f in compose.yml versions.env env.example; do
+    if [[ -L $dest/$f || ! -f $dest/$f ]]; then
+      log "번들 거부: $f 가 일반 파일이 아님(심볼릭 링크 · 폴더 등)"
+      return 1
+    fi
+  done
 }
 
 preflight() { # 돌고 있는 것을 건드리기 전 점검. 실패하면 return 1

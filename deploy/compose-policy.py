@@ -87,8 +87,18 @@ def main():
     if cfg.get("name") != "respec":
         bad(f"프로젝트 이름이 respec 이어야 함 ({cfg.get('name')!r})")
     nets = cfg.get("networks") or {}
-    if set(nets) - {"default"} or any((v or {}).get("external") for v in nets.values()):
-        bad("네트워크는 compose 기본(default)뿐이어야 함 (external 금지)")
+    if set(nets) - {"default"}:
+        bad("네트워크는 compose 기본(default)뿐이어야 함")
+    # compose 가 정규화한 기본 네트워크는 {"name": "respec_default", "ipam": {}} 하나. driver · driver_opts · ipam 내용 ·
+    # external · internal 같은 다른 키가 붙으면 호스트 네트워크 쪽을 건드릴 수 있으므로 허용 목록(name · 빈 ipam)에 맞춤
+    default_net = nets.get("default") or {}
+    extra_keys = sorted(set(default_net) - {"name", "ipam"})
+    if extra_keys:
+        bad(f"기본 네트워크에 허용하지 않는 설정이 있음: {', '.join(extra_keys)}")
+    if default_net.get("ipam"):
+        bad("기본 네트워크의 ipam 은 비어 있어야 함")
+    if default_net.get("name") not in (None, "respec_default"):
+        bad(f"기본 네트워크 이름이 respec_default 이어야 함 ({default_net.get('name')!r})")
 
     services = cfg.get("services", {})
     if set(services) != set(SERVICES):
