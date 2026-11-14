@@ -4,15 +4,19 @@ Edge `serve()`가 하던 일을 맨 바깥 미들웨어 하나가 함:
   · OPTIONS는 바로 답함 (Edge는 200, 서버는 204 — 완결점 1-4)
   · X-Request-Id: 앱이 보낸 값이 짧고 안전한 글자일 때만 그대로 쓰고, 아니면 새로 만듦 (응답 · 로그에 그대로 찍히므로)
   · 모든 응답(오류 · 500 포함)에 CORS · X-Request-Id를 붙임
-  · 예상 못 한 오류는 원문을 로그에만(요청 번호와 함께) 남기고 사용자에게는 일반 문구
-로그에는 메서드 · 경로 · 상태 · 걸린 시간 · 요청 번호만 남김 — 토큰 · 키 · 좌표 · 검색어 · 본문 · 쿼리 문자열은 절대 안 남김
+  · 예상 못 한 오류는 사용자에게 일반 문구. 로그에는 요청 번호 · 예외 종류 · 코드 위치(파일:줄:함수)만 남김
+    (예외 메시지에는 좌표 · 검색어 · 키가 섞일 수 있어 원문은 안 남김 — 재현은 요청 번호로)
+로그에는 메서드 · 경로(퍼센트 인코딩) · 상태 · 걸린 시간 · 요청 번호만 남김 — 토큰 · 키 · 좌표 · 검색어 · 본문 · 쿼리 문자열은 절대 안 남김
 """
 
 import json
 import logging
+import os
 import re
 import time
+import traceback
 import uuid
+from urllib.parse import quote
 
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
@@ -58,6 +62,12 @@ def request_id_in(request: Request) -> str:
     return request.scope.get("state", {}).get("request_id", "-")
 
 
+def _crash_location(exc: BaseException) -> str:
+    """예외가 난 곳 — 안쪽부터 최대 5칸 `파일:줄:함수`. 예외 메시지 · 변수 값은 안 넣음"""
+    frames = traceback.extract_tb(exc.__traceback__)[-5:]
+    return " <- ".join(f"{os.path.basename(f.filename)}:{f.lineno}:{f.name}" for f in reversed(frames)) or "-"
+
+
 class EdgeCompatMiddleware:
     """맨 바깥 미들웨어 (순수 ASGI) — 위 설명 참고"""
 
@@ -92,18 +102,24 @@ class EdgeCompatMiddleware:
                 await Response(status_code=204)(scope, receive, send_with_headers)
             else:
                 await self.app(scope, receive, send_with_headers)
-        except Exception:  # noqa: BLE001 — 예상 못 한 오류는 여기서 일반 문구로 바꿈
-            # 원문은 로그에만, 요청 본문 · 헤더는 안 찍음 (예외 메시지에 값이 섞일 수 있어 스택은 남기되 값 꺼내 쓰지 않음)
-            log.exception("unexpected error request_id=%s", request_id)
-            if started:
-                raise
-            await error_response(AppError("INTERNAL", INTERNAL_MESSAGE))(scope, receive, send_with_headers)
+        except Exception as exc:  # noqa: BLE001 — 예상 못 한 오류는 여기서 일반 문구로 바꿈
+            log.error(
+                "unexpected error request_id=%s type=%s at=%s",
+                request_id,
+                type(exc).__name__,
+                _crash_location(exc),
+            )
+            # 응답이 이미 시작됐으면 더 보낼 수 없음 — 다시 던지면 서버(uvicorn)가 예외 메시지째 로그에 찍으므로 여기서 마무리
+            if not started:
+                await error_response(AppError("INTERNAL", INTERNAL_MESSAGE))(
+                    scope, receive, send_with_headers
+                )
         finally:
             log.info(
                 "request_id=%s method=%s path=%s status=%s ms=%d",
                 request_id,
                 scope["method"],
-                scope["path"],
+                quote(scope["path"], safe="/"),  # 디코딩된 줄바꿈 등이 가짜 로그 줄이 되지 않게 퍼센트 인코딩
                 status_holder["status"],
                 (time.perf_counter() - started_at) * 1000,
             )

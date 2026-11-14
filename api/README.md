@@ -11,7 +11,8 @@
 | `GET /me` | 토큰 주인의 `{"id": ...}` | 필요 |
 | `OPTIONS *` | CORS 사전 확인. 토큰 없이 204 | 없음 |
 
-`/docs` · `/redoc` · `/openapi.json`은 꺼 둠(404).
+`/docs` · `/redoc` · `/openapi.json`은 꺼 둠(404). 끝에 `/`를 붙인 주소(`/me/`)도 리다이렉트 없이 404.
+`/health/deep`은 부를 때마다 서버 키로 PostgREST를 1회 호출하므로 nginx에서 요청 수 제한을 걸 것(AWS 세션).
 
 ## 토큰 검사 (`app/core/auth.py` · `jwks.py`)
 
@@ -25,7 +26,10 @@
 | 공개 키 목록을 못 받고 캐시도 없음 | 503 `AUTH_UNAVAILABLE` (401이면 앱이 사용자를 로그아웃시키므로 503) |
 | 공개 키 목록을 못 받지만 캐시 있음 | 낡은 캐시로 계속 검사 |
 
-- 캐시: 10분(`JWKS_CACHE_TTL_SECONDS`)이 지나면 새로 받아 봄. 모르는 `kid`는 키 교체일 수 있어 한 번 새로 받되, 30초(`JWKS_MIN_REFETCH_SECONDS`) 안에서는 다시 안 받음(아무 `kid`나 보내 두드리는 것 방지).
+- 캐시: 10분(`JWKS_CACHE_TTL_SECONDS`)이 지나면 새로 받아 봄. 이때 새로 받는 요청 하나만 기다리고 나머지는 낡은 캐시로 바로 검사(JWKS가 느려도 요청이 줄줄이 늦어지지 않음).
+- 모르는 `kid`는 키 교체일 수 있어 새로 받아 보되, 10초(`JWKS_MIN_REFETCH_SECONDS`) 안에서는 다시 안 받음(아무 `kid`나 보내 두드리는 것 방지). 새로 받아 봐도 없으면 401. **받기가 실패해서 가릴 수 없으면 503**(정상 사용자를 로그아웃시키지 않으려고). 키 교체 직후 새 `kid` 사용자는 최대 10초 401이 될 수 있으나 Supabase는 새 키를 서명에 쓰기 전에 JWKS에 먼저 올림.
+- JWKS 응답이 깨졌거나 키 하나가 깨졌으면 그 항목만 건너뛰고, 쓸 수 있는 키가 하나도 없으면 실패로 취급(캐시가 있으면 계속 사용).
+- 낡은 캐시에는 상한이 없음: JWKS가 오래 안 받아져도 마지막으로 받은 키로 검사를 이어 감(토큰 만료가 1시간이라 새 토큰은 계속 통과). 키가 폐기돼도 JWKS를 다시 받기 전에는 그 키로 서명한 토큰이 통과할 수 있음.
 - **알려진 한계 (기록)**: DB · Auth에 안 물으므로 **탈퇴(삭제)한 계정의 토큰도 만료(기본 1시간)까지는 통과**함. 되돌릴 수 없는 쓰기(계정 삭제 등)는 그 함수에서 Supabase Auth에 한 번 더 확인할 것(설계 S4, 2차 이후). `tests/test_auth.py::test_deleted_account_token_passes_until_expiry`가 이 동작을 고정해 둠.
 
 ## 오류 모양 (`app/core/errors.py` · `http.py`)
@@ -38,7 +42,11 @@
 
 ## 로그에 안 남기는 것
 
-토큰 · 키 · 좌표 · 장소 검색어 · 푸시 토큰 · 요청 본문 · 쿼리 문자열. 로그 한 줄은 `request_id · method · path · status · ms`만. `tests/`가 토큰 · 쿼리 문자열 · 입력값이 로그와 응답에 없는지 확인함.
+토큰 · 키 · 좌표 · 장소 검색어 · 푸시 토큰 · 요청 본문 · 쿼리 문자열. 로그 한 줄은 `request_id · method · path(퍼센트 인코딩) · status · ms`만.
+- 예상 못 한 오류는 요청 번호 · 예외 종류 · 코드 위치(`파일:줄:함수`)만 남기고 **예외 메시지는 안 남김**(좌표 · 검색어 · 키가 섞일 수 있어서).
+- `httpx`(나가는 요청 URL을 쿼리째 찍음)와 `httpcore` 로그는 WARNING 이상만. 설정이 틀려 기동이 실패해도 오류 글에 입력값이 안 나옴(`hide_input_in_errors`).
+- uvicorn은 반드시 `--no-access-log`로 띄울 것(접근 로그에는 쿼리 문자열이 찍힘).
+- `tests/`가 토큰 · 쿼리 문자열 · 입력값 · 예외 메시지가 로그와 응답에 없는지 확인함.
 
 ## 설정 (환경 변수)
 
@@ -52,9 +60,9 @@
 | `SUPABASE_SECRET_KEY` | `/health/deep`에 | 서버 전용 Supabase 키(`sb_secret_…`). PostgREST로 `server_heartbeat`를 읽음. 없으면 deep의 db 검사가 실패 |
 | `JWT_AUDIENCE` | 아니오 | 기본 `authenticated` |
 | `JWT_LEEWAY_SECONDS` | 아니오 | 시계 어긋남 허용, 기본 10 |
-| `JWKS_CACHE_TTL_SECONDS` · `JWKS_MIN_REFETCH_SECONDS` · `HTTP_TIMEOUT_SECONDS` | 아니오 | 기본 600 · 30 · 3 |
+| `JWKS_CACHE_TTL_SECONDS` · `JWKS_MIN_REFETCH_SECONDS` · `HTTP_TIMEOUT_SECONDS` | 아니오 | 기본 600 · 10 · 3 |
 | `HEALTH_REQUIRE_SCHEDULER` · `SCHEDULER_STALE_MINUTES` | 아니오 | 스케줄러(S3) 배포 뒤 `true`로. 켜면 `server_heartbeat.alive_at`이 15분 넘게 멈추면 deep 실패 |
-| `LOG_LEVEL` | 아니오 | 기본 `INFO` |
+| `LOG_LEVEL` | 아니오 | 기본 `INFO` (대소문자 무관, DEBUG · INFO · WARNING · ERROR · CRITICAL) |
 
 ## 개발
 

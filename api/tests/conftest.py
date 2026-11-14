@@ -65,6 +65,7 @@ class FakeSupabase:
     signer: Signer
     jwks_down: bool = False
     jwks_keys: list[dict] | None = None  # None이면 signer 하나
+    jwks_body: object | None = None  # 값이 있으면 {"keys": ...} 대신 이 본문을 그대로 돌려줌 (깨진 응답 흉내)
     heartbeat: list[dict] = field(default_factory=lambda: [{"alive_at": None}])
     rest_down: bool = False
     jwks_calls: int = 0
@@ -75,6 +76,8 @@ class FakeSupabase:
             self.jwks_calls += 1
             if self.jwks_down:
                 raise httpx.ConnectError("jwks down")
+            if self.jwks_body is not None:
+                return httpx.Response(200, json=self.jwks_body)
             return httpx.Response(
                 200, json={"keys": self.jwks_keys if self.jwks_keys is not None else [self.signer.jwk]}
             )
@@ -93,6 +96,13 @@ def make_settings(**overrides) -> Settings:
         "jwks_min_refetch_seconds": 30,
     }
     return Settings(**{**base, **overrides})
+
+
+@pytest.fixture(autouse=True)
+def _isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """개발자 PC · CI에 설정 환경 변수가 있어도 시험이 흔들리지 않게 — Settings가 읽는 변수를 전부 비움"""
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name.upper(), raising=False)
 
 
 @pytest.fixture

@@ -10,7 +10,7 @@ from app.core.http import CORS_HEADERS
 from app.main import create_app
 from tests.conftest import bearer, make_settings
 
-# `supabase/functions/_shared/errors.ts` ERROR_STATUS 그대로 (11/13 기준). 한쪽만 바뀌면 이 시험이 깨져 알려 줌
+# `supabase/functions/_shared/errors.ts` ERROR_STATUS를 붙여 넣은 사본 (11/13 기준). errors.ts가 바뀌면 사람이 같이 고쳐야 함 — 자동 대조는 본 레포와 서버를 함께 보는 계약 시험(2-1)의 몫
 EDGE_ERROR_STATUS = {
     "VALIDATION_FAILED": 400,
     "AUTH_REQUIRED": 401,
