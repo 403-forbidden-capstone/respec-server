@@ -1,0 +1,47 @@
+# 로컬 실행용 compose — api + scheduler를 운영과 같은 이미지(api/Dockerfile)로 띄움
+# 운영 배포용 compose는 deploy/compose.yml(배포 길)이고, 이 파일은 개발 PC 전용임
+#
+#   python dev/local_stack.py env                                  # 먼저 dev/.stack/api.env 만들기
+#   docker compose -f compose.local.yml up -d --build              # 처음부터 띄우기
+#   python dev/local_stack.py check --api-url http://127.0.0.1:28000
+#   docker compose -f compose.local.yml down                       # 내리기 (이미지는 남음)
+#
+# 서버가 붙는 곳은 격리 로컬 Supabase(dev/stack-config.toml, 호스트 포트 28321)이며 운영 DB가 아님
+# 자세한 순서 · 막혔을 때: docs/local-dev.md
+
+name: respec-server-local
+
+x-server-env: &server-env
+  env_file: dev/.stack/api.env
+  environment:
+    # 컨테이너 안에서 호스트의 로컬 Supabase로 가는 주소. 토큰의 iss(발급자)는 호스트에서 본 주소 그대로이므로
+    # 검사 기준은 api.env의 SUPABASE_JWT_ISSUER(http://127.0.0.1:28321/auth/v1)를 그대로 씀
+    SUPABASE_URL: http://host.docker.internal:28321
+    SUPABASE_JWKS_URL: http://host.docker.internal:28321/auth/v1/.well-known/jwks.json
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  api:
+    <<: *server-env
+    build: ./api
+    image: respec-api:local
+    ports:
+      - "127.0.0.1:28000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  scheduler:
+    <<: *server-env
+    image: respec-api:local
+    command: ["python", "-m", "app.scheduler"]
+    depends_on:
+      api:
+        condition: service_healthy

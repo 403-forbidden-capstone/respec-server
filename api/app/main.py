@@ -3,6 +3,7 @@
 설정은 환경 변수(`app/core/config.py`). 시험은 create_app(settings, transport=...)로 가짜 설정 · 가짜 네트워크를 넣음.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -32,6 +33,8 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client = httpx.AsyncClient(timeout=settings.http_timeout_seconds, transport=transport)
         app.state.http = client
+        app.state.deep_lock = asyncio.Lock()
+        app.state.deep_cache = None  # (시각, 본문, 상태) — /health/deep 짧은 캐시
         app.state.jwks = JwksCache(
             client,
             settings.jwks_url,

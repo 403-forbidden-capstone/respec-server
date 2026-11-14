@@ -1,0 +1,103 @@
+# 서버 개발용 "격리" 로컬 Supabase 설정 — 본 레포(respec-alarm-capstone)의 로컬 스택과 따로 뜸
+#
+# 본 레포 supabase/config.toml과 다른 점
+#   - project_id가 달라서 컨테이너 · 볼륨 이름이 안 겹침 (본 레포 스택을 켜 둔 채로도 같이 뜸)
+#   - 호스트 포트가 전부 28xxx (Windows는 54236~54435 같은 구간을 예약해서 기본 포트 54321 · 54322가 안 열리는 PC가 있음)
+#   - 로그인 토큰 서명이 ES256 (운영 Supabase가 ES256 · JWKS라서 서버의 토큰 검사와 같은 모양이어야 함)
+#     signing_keys.json은 dev/local_stack.py가 만들고 깃에 안 들어감
+#   - 안 쓰는 것(Studio · 메일함 · 분석)은 끔
+# 이 파일을 dev/.stack/supabase/config.toml로 복사해 쓰는 것은 dev/local_stack.py가 함 — 직접 고치지 않음
+
+project_id = "respec-server-dev"
+
+[api]
+enabled = true
+port = 28321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 28322
+shadow_port = 28320
+health_timeout = "2m"
+# 운영 DB와 같은 메이저 버전
+major_version = 17
+
+[db.pooler]
+enabled = false
+
+[db.migrations]
+enabled = true
+
+# 시드는 본 레포가 따로 관리(supabase/seed/) — 여기서는 비어 있는 DB로 시작
+[db.seed]
+enabled = false
+
+[realtime]
+enabled = true
+
+[studio]
+enabled = false
+port = 28323
+
+[local_smtp]
+enabled = false
+port = 28324
+
+[storage]
+enabled = true
+
+[storage.s3_protocol]
+enabled = false
+
+[storage.analytics]
+enabled = false
+
+[storage.vector]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"
+additional_redirect_urls = ["https://127.0.0.1:3000"]
+jwt_expiry = 3600
+enable_signup = true
+signing_keys_path = "./signing_keys.json"
+
+[auth.email]
+enable_signup = true
+# 시험 계정을 메일 확인 없이 바로 만들기 위해 끔
+enable_confirmations = false
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+inspector_port = 28383
+deno_version = 2
+
+[analytics]
+enabled = false
+port = 28327
+
+# 아래 verify_jwt는 본 레포 supabase/config.toml과 같게 둠 (함수가 늘면 같이 맞출 것)
+[functions.alarm-suggest]
+verify_jwt = true
+[functions.alarm-commit]
+verify_jwt = true
+[functions.appointment-edit]
+verify_jwt = true
+[functions.account-delete]
+verify_jwt = true
+[functions.place-search]
+verify_jwt = true
+[functions.place-reverse]
+verify_jwt = true
+[functions.notify]
+verify_jwt = true
+[functions.wake-check]
+verify_jwt = false
+[functions.alarm-roll]
+verify_jwt = false
+[functions.suggestion-generate]
+verify_jwt = false
