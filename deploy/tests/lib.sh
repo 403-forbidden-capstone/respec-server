@@ -46,7 +46,8 @@ find_python() {
 
 # 파일 권한은 윈도우 PC 에서 chmod 가 안 먹으므로 stat 을 가짜로 바꿔 끼움 (자식 bash 에도 전달됨)
 fake_stat() {
-  stat() { printf '%s\n' "${FAKE_STAT_MODE:-600}"; }
+  # 권한 조회(stat -c %a)만 가짜로, 나머지(크기 등)는 진짜 stat
+  stat() { if [[ ${1-} == -c && ${2-} == %a ]]; then printf '%s\n' "${FAKE_STAT_MODE:-600}"; else command stat "$@"; fi; }
   export -f stat
 }
 

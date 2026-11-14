@@ -11,8 +11,9 @@
 #   4 GET  /me  (시험 계정 토큰)    200 + 본문에 "id"   (토큰은 Supabase 로그인으로 받음)
 #   5 --ml 이면 GET /health         200 + "ok": true
 #
-# 4번에서 Supabase 로그인 자체가 안 되면(Supabase 장애) WARN 으로 넘어감 — 멀쩡한 배포를 되돌리지 않기 위함.
-# 단 시험 계정 설정이 비어 있으면 실패. SMOKE_STRICT=1 이면 로그인 실패도 FAIL (손으로 돌릴 때).
+# 4번에서 Supabase 에 못 닿거나 장애(연결 불가 · 5xx · 429)면 WARN 으로 넘어감 — 멀쩡한 배포를 되돌리지 않기 위함.
+# 단 시험 계정 설정이 비어 있거나, 로그인이 거부되면(400 · 401 · 403: 비밀번호 변경 · 계정 삭제) 실패.
+# SMOKE_STRICT=1 이면 장애로 인한 로그인 실패도 FAIL (손으로 돌릴 때).
 # 비밀번호 · 토큰은 명령줄 인자로 넘기지 않음(ps 에 안 보이게). 권한 700 임시 폴더의 파일로 넘기고 곧바로 지움.
 set -Eeuo pipefail
 
@@ -105,11 +106,20 @@ else
     token=$(sed -n '/"access_token"/{s/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;q}' "$TMP/body")
   fi
   if [[ -z $token ]]; then
-    if [[ $STRICT == 1 ]]; then
-      fail "4 /me: Supabase 로그인 실패 (상태 $login)"
-    else
-      warn "4 /me: Supabase 로그인 실패 (상태 $login) — Supabase 쪽 문제일 수 있어 건너뜀"
-    fi
+    case "$login" in
+      000 | 5?? | 429)
+        # Supabase 에 못 닿거나 장애(연결 불가 · 5xx · 요청 제한): 서버 잘못이 아니므로 기본은 경고로 넘김
+        if [[ $STRICT == 1 ]]; then
+          fail "4 /me: Supabase 로그인 실패 (상태 $login)"
+        else
+          warn "4 /me: Supabase 로그인 실패 (상태 $login) — Supabase 쪽 문제일 수 있어 건너뜀"
+        fi
+        ;;
+      *)
+        # 400 · 401 · 403 등: 계정 · 비밀번호가 틀림(비밀번호가 바뀌었거나 시험 계정이 지워짐) → 인증 경로를 영영 못 보게 되므로 실패
+        fail "4 /me: 시험 계정 로그인이 거부됨 (상태 $login) — smoke.env 의 계정 · 비밀번호가 맞는지, 계정이 살아 있는지 확인"
+        ;;
+    esac
   else
     printf 'Authorization: Bearer %s\n' "$token" >hdr_auth
     code=$(req "$BASE/me" -H @hdr_auth)

@@ -19,6 +19,8 @@ services:
   api:
     image: *api-image
     restart: unless-stopped
+    # init: true = 작은 init(tini)이 PID 1. 파이썬이 PID 1 이면 SIGTERM 을 무시해 매번 종료가 30초 뒤 강제 종료(SIGKILL)로 끝남
+    init: true
     env_file: ./api.env
     environment:
       APP_VERSION: ${API_TAG}
@@ -42,6 +44,8 @@ services:
   scheduler:
     image: *api-image
     restart: unless-stopped
+    # (init: true — 위와 같은 이유)
+    init: true
     command: ["python", "-m", "app.scheduler"]
     env_file: ./api.env
     environment:
@@ -56,6 +60,8 @@ services:
     profiles: ["ml"]
     image: ghcr.io/403-forbidden-capstone/respec-prepare-ml:${ML_TAG:-none}
     restart: unless-stopped
+    # (init: true — 위와 같은 이유)
+    init: true
     env_file: ./ml.env
     environment:
       CATBOOST_MODEL_DIR: /app/models/v4_age_only

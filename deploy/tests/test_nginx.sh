@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034
 # nginx 설정 시험.
 #   [정적] 열린 주소 목록이 정해진 것과 같은지 (예: /ml/models 가 실수로 열리지 않았는지) — 항상 돎
-#   [동적] 실제 nginx(Ubuntu 24.04 apt 판과 같은 1.24) 로 문법 검사 — docker 엔진이 있을 때만 (CI 에서 돎)
+#   [동적] 실제 nginx 로 문법 검사 — Ubuntu 24.04 apt 판(1.24)과 26.04 apt 판(1.28) 둘 다. docker 엔진이 있을 때만 (CI 에서 돎)
 set -Eeuo pipefail
 SUITE="nginx"
 # shellcheck source=lib.sh
@@ -36,16 +36,28 @@ assert_contains "로그에 쿼리스트링이 없음 (\$uri)" "$glob" '"$request
 assert_not_contains "로그에 \$request(쿼리 포함)를 안 씀" "$glob" '$request '
 assert_contains "버전 숨김" "$glob" 'server_tokens off;'
 
+echo "[3b] 요청 수 제한 · 쿼리스트링 거절 · 기본 서버 접속 기록 끔"
+block() { awk -v lit="$1" 'index($0, lit) {on=1} on {print} on && /^    }/ {exit}' "$NG/respec-api.conf"; }
+assert_contains "/health/deep 에 요청 수 제한" "$(block 'location = /health/deep')" 'limit_req zone=health_deep'
+assert_contains "/fn/ 에 거친 상한" "$(block 'location ^~ /fn/')" 'limit_req zone=api_general'
+assert_contains "/me 에 거친 상한" "$(block 'location = /me')" 'limit_req zone=api_general'
+assert_contains "health_deep 구역 정의" "$glob" 'limit_req_zone $binary_remote_addr zone=health_deep:'
+assert_contains "api_general 구역 정의" "$glob" 'limit_req_zone $binary_remote_addr zone=api_general:'
+assert_contains "쿼리스트링이 붙으면 400" "$conf" 'if ($args != "") {'
+assert_eq "기본 서버(80 · 443) 접속 기록 끔" 2 "$(grep -c 'access_log off;' "$NG/respec-api.conf")"
+assert_eq "HTTP 모양의 기본 서버도 접속 기록 끔" 1 "$(grep -c 'access_log off;' "$NG/respec-api.http.conf")"
+
 echo "[4] 실제 nginx 로 문법 검사 (docker 엔진이 있을 때)"
 if ! docker info >/dev/null 2>&1; then
   echo "  skip docker 엔진이 없어 nginx -t 를 건너뜀 (CI · 새 서버 bootstrap 에서 검사함)"
 else
-  for site in respec-api.http.conf respec-api.conf; do
+  for ver in 1.24 1.28; do
+   for site in respec-api.http.conf respec-api.conf; do
     rc=0
     out=$(docker run --rm \
       -v "$(native_path "$NG/respec-global.conf"):/etc/nginx/conf.d/00-global.conf:ro" \
       -v "$(native_path "$NG/$site"):/etc/nginx/conf.d/10-site.conf:ro" \
-      nginx:1.24 sh -c '
+      "nginx:$ver" sh -c '
         set -e
         rm -f /etc/nginx/conf.d/default.conf
         d=/etc/letsencrypt/live/api.respecalarm.com
@@ -53,8 +65,9 @@ else
         openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=api.respecalarm.com \
           -keyout "$d/privkey.pem" -out "$d/fullchain.pem" 2>/dev/null
         nginx -t' 2>&1) || rc=$?
-    assert_rc "nginx -t: $site" 0 "$rc"
+    assert_rc "nginx $ver -t: $site" 0 "$rc"
     [[ $rc == 0 ]] || echo "$out"
+   done
   done
 fi
 

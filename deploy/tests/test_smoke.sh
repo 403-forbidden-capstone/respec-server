@@ -114,12 +114,25 @@ run
 assert_rc "종료 코드 1" 1 "$RC"
 assert_contains "설정 비어 있음" "$OUT" "시험 계정 설정이 비어 있음"
 
-echo "[8] 비밀번호가 틀리면 로그인 실패 → 경고 (토큰을 못 받음)"
+echo "[8] 시험 계정 비밀번호가 틀리면(비밀번호 변경 · 계정 삭제) 로그인 거부 → 실패 (조용히 넘기지 않음)"
 start_mock
 write_env
 sed -i 's/^SMOKE_PASSWORD=.*/SMOKE_PASSWORD=wrong/' "$TMP/smoke.env"
 run
-assert_contains "로그인 실패 경고" "$OUT" "WARN  4 /me: Supabase 로그인 실패"
+assert_rc "종료 코드 1" 1 "$RC"
+assert_contains "로그인 거부 문구" "$OUT" "FAIL  4 /me: 시험 계정 로그인이 거부됨 (상태 400)"
+for st in 401 403; do
+  start_mock LOGIN_STATUS=$st
+  write_env
+  run
+  assert_rc "로그인 $st → 실패" 1 "$RC"
+  assert_contains "로그인 $st 문구" "$OUT" "로그인이 거부됨 (상태 $st)"
+done
+start_mock LOGIN_STATUS=429
+write_env
+run
+assert_rc "로그인 429(요청 제한) → 경고만" 0 "$RC"
+assert_contains "429 경고" "$OUT" "WARN  4 /me: Supabase 로그인 실패 (상태 429)"
 
 echo "[9] 예측 서버: ok=true 면 통과, 503 이면 실패"
 start_mock ML_OK=1

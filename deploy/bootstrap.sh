@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# 새 Ubuntu 24.04 (arm64) 서버를 한 번에 세팅함. 두 번 돌려도 결과가 같음(이미 된 것은 건너뜀).
-# 값 · 열쇠 · 비밀번호가 든 파일(api.env · ml.env · deploy.env · 모델 파일 · 인증서)은 절대 덮어쓰지 않음.
+# 새 Ubuntu 24.04 · 26.04 LTS (arm64) 서버를 한 번에 세팅함. 두 번 돌려도 결과가 같음(이미 된 것은 건너뜀).
+# 값 · 열쇠 · 비밀번호가 든 파일(api.env · ml.env · deploy.env · smoke.env · 모델 파일 · 인증서)은 절대 덮어쓰지 않음.
 #
-# 실행 (새 서버가 생기고 지형님 OK 가 난 뒤, 세션이 SSH 로)
-#   PC:     scp -i <열쇠> -r deploy .env.example ubuntu@<서버>:/tmp/respec-src/
-#   서버:   sudo DEPLOY_PUBKEY_FILE=/tmp/respec-src/respec-deploy-key.pub bash /tmp/respec-src/deploy/bootstrap.sh
-#   인증서: sudo CERTBOT_EMAIL=<알림 받을 메일> bash /tmp/respec-src/deploy/bootstrap.sh --issue-cert   (DNS 가 이 서버를 가리킨 뒤)
+# 실행 (새 서버가 생기고 지형님 OK 가 난 뒤, 세션이 SSH 로). 26.04 의 sudo 는 sudo-rs 라서 환경 변수는 `sudo env VAR=값 명령`
+#   PC:     ssh -i <열쇠> ubuntu@<서버> 'mkdir -p /tmp/respec-src'
+#           scp -i <열쇠> -r deploy .env.example respec-deploy-key.pub ubuntu@<서버>:/tmp/respec-src/
+#   서버:   sudo env DEPLOY_PUBKEY_FILE=/tmp/respec-src/respec-deploy-key.pub bash /tmp/respec-src/deploy/bootstrap.sh
+#   인증서: sudo env CERTBOT_EMAIL=<알림 받을 메일> bash /tmp/respec-src/deploy/bootstrap.sh --issue-cert   (DNS 가 이 서버를 가리킨 뒤)
 #
 # 옵션: --skip-upgrade (apt 업그레이드 건너뜀) · --issue-cert (Let's Encrypt 인증서 발급 + nginx 를 HTTPS 모양으로)
 # 환경 변수
 #   DEPLOY_PUBKEY / DEPLOY_PUBKEY_FILE  배포 열쇠의 공개 키(한 줄). 없으면 deploy 계정은 만들되 열쇠는 안 넣음
 #   CERTBOT_EMAIL                       --issue-cert 때 필수 (인증서 만료 알림 메일)
-#   DOCKER_VERSION                      docker-ce 버전 문자열 고정(예: 5:29.9.3-1~ubuntu.24.04~noble). 없으면 최신 설치 후 hold
+#   DOCKER_VERSION                      docker-ce 버전 문자열 고정(예: 5:29.9.3-1~ubuntu.26.04~resolute). 없으면 최신 설치 후 hold
 #
 # 하는 일: 업그레이드 · 기본 패키지 · docker-ce(공식 저장소, 버전 hold) · docker 로그 제한 · swap 2GB · ufw · fail2ban · ssh 강화
 #          · nginx · certbot · deploy 계정(강제 명령) · /srv/respec 폴더와 env 틀 · 보안 업데이트 자동(자동 재부팅 끔)
@@ -57,15 +58,28 @@ install_if_changed() { # install_if_changed 모드 소유자 원본 대상
     chmod "$mode" "$dst"
     return 1
   fi
-  install -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$src" "$dst"
+  # 설치 자체가 실패하면 "변경 없음"(종료 코드 1)으로 삼켜지지 않게 여기서 멈춤
+  install -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$src" "$dst" || die "설치 실패: $dst"
+}
+
+# apt 는 새 EC2 에서 cloud-init · unattended-upgrades 가 잠금을 쥐고 있어 처음 몇 분은 실패할 수 있음 → 기다리며 재시도
+apt_get() { apt-get -y -q -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confold "$@"; }
+apt_retry() { # apt_retry 명령... — 잠금 때문에 실패하면 10초 간격으로 최대 30번
+  local i
+  for i in $(seq 1 30); do
+    "$@" && return 0
+    echo "   apt 가 바쁘거나 실패함 — 10초 뒤 다시 ($i/30)"
+    sleep 10
+  done
+  return 1
 }
 
 # ---------------------------------------------------------------- 0 사전 확인
 step "0 사전 확인"
 . /etc/os-release
-[[ ${ID:-} == ubuntu && ${VERSION_ID:-} == 24.04 ]] || die "Ubuntu 24.04 에서만 실행함 (지금 ${PRETTY_NAME:-알 수 없음})"
+[[ ${ID:-} == ubuntu && ( ${VERSION_ID:-} == 24.04 || ${VERSION_ID:-} == 26.04 ) ]] || die "Ubuntu 24.04 · 26.04 LTS 에서만 실행함 (지금 ${PRETTY_NAME:-알 수 없음})"
 [[ $(uname -m) == aarch64 ]] || die "arm64(aarch64) 서버에서만 실행함 (지금 $(uname -m))"
-for f in deploy.sh smoke.sh check-env.sh nginx/respec-global.conf nginx/respec-api.conf nginx/respec-api.http.conf; do
+for f in deploy.sh smoke.sh check-env.sh compose-policy.py nginx/respec-global.conf nginx/respec-api.conf nginx/respec-api.http.conf; do
   [[ -f $SRC_DIR/$f ]] || die "$SRC_DIR/$f 없음 — deploy 폴더 전체와 .env.example 을 같이 올렸는지 확인"
 done
 [[ -n $EXAMPLE_SRC ]] || die ".env.example 을 못 찾음 (deploy 폴더 옆이나 안에 있어야 함)"
@@ -73,32 +87,46 @@ note "$PRETTY_NAME / $(uname -m) / 메모리 $(free -m | awk '/^Mem:/{print $2}'
 
 # ---------------------------------------------------------------- 1 업그레이드 · 기본 패키지
 step "1 apt 업그레이드 · 기본 패키지"
+apt_retry apt-get -q update
 if [[ $SKIP_UPGRADE == 0 ]]; then
-  apt-get update -q
-  apt-get -y -q -o Dpkg::Options::=--force-confold upgrade
+  apt_get upgrade
 else
   note "--skip-upgrade: 업그레이드 건너뜀"
-  apt-get update -q
 fi
-apt-get install -y -q ca-certificates curl gnupg nginx certbot fail2ban python3-systemd ufw unattended-upgrades
+# python3: deploy.sh 가 compose 정책 점검(compose-policy.py)에 씀
+apt_get install ca-certificates curl gnupg python3 nginx certbot fail2ban python3-systemd ufw unattended-upgrades
 
 # ---------------------------------------------------------------- 2 docker-ce
 step "2 docker-ce (공식 저장소) · compose 플러그인 · 버전 hold"
 install -m 0755 -d /etc/apt/keyrings
 if [[ ! -s /etc/apt/keyrings/docker.asc ]]; then
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-  chmod a+r /etc/apt/keyrings/docker.asc
+  # 임시 파일에 받은 뒤 옮김: 받다가 끊겨 잘린 키가 남으면 다시 돌려도 안 고쳐지는 것을 막음
+  key_tmp=$(mktemp)
+  curl -fsSL --retry 3 https://download.docker.com/linux/ubuntu/gpg -o "$key_tmp" || die "Docker 서명 키를 못 받음"
+  gpg --show-keys "$key_tmp" >/dev/null 2>&1 || die "받은 Docker 서명 키가 올바른 키 파일이 아님"
+  install -m 0644 "$key_tmp" /etc/apt/keyrings/docker.asc
+  rm -f "$key_tmp"
 fi
-repo_line="deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable"
-if [[ ! -f /etc/apt/sources.list.d/docker.list ]] || [[ $(cat /etc/apt/sources.list.d/docker.list) != "$repo_line" ]]; then
-  echo "$repo_line" >/etc/apt/sources.list.d/docker.list
-  apt-get update -q
+# 저장소 설정은 deb822(.sources) 형식 — Ubuntu 26.04 의 기본 형식이고 24.04 도 받음
+docker_src=$(mktemp)
+cat >"$docker_src" <<SRC
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: ${UBUNTU_CODENAME}
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+SRC
+rm -f /etc/apt/sources.list.d/docker.list # 예전 한 줄 형식이 있으면 중복되므로 지움
+if install_if_changed 0644 root:root "$docker_src" /etc/apt/sources.list.d/docker.sources; then
+  apt_retry apt-get -q update
 fi
+rm -f "$docker_src"
 if ! dpkg -s docker-ce >/dev/null 2>&1; then
   if [[ -n ${DOCKER_VERSION:-} ]]; then
-    apt-get install -y -q "docker-ce=$DOCKER_VERSION" "docker-ce-cli=$DOCKER_VERSION" containerd.io docker-buildx-plugin docker-compose-plugin
+    apt_get install "docker-ce=$DOCKER_VERSION" "docker-ce-cli=$DOCKER_VERSION" containerd.io docker-buildx-plugin docker-compose-plugin
   else
-    apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    apt_get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   fi
 else
   note "docker-ce 이미 설치됨 — 건드리지 않음"
@@ -107,13 +135,14 @@ fi
 apt-mark hold docker-ce docker-ce-cli containerd.io docker-compose-plugin >/dev/null
 note "docker $(docker --version | awk '{print $3}' | tr -d ,) / $(docker compose version | head -1) (hold)"
 
-# docker 로그 크기 제한: 컨테이너별 10MB x 3개
+# docker 설정: 로그는 컨테이너별 10MB x 3개 / live-restore = docker 데몬이 재시작(업그레이드 등)돼도 컨테이너는 계속 돎
 install -d -m 0755 /etc/docker
 daemon_json=$(mktemp)
 cat >"$daemon_json" <<'JSON'
 {
   "log-driver": "json-file",
-  "log-opts": { "max-size": "10m", "max-file": "3" }
+  "log-opts": { "max-size": "10m", "max-file": "3" },
+  "live-restore": true
 }
 JSON
 if install_if_changed 0644 root:root "$daemon_json" /etc/docker/daemon.json; then
@@ -167,9 +196,15 @@ maxretry = 5
 findtime = 10m
 bantime = 1h
 CONF
-if install_if_changed 0644 root:root "$f2b" /etc/fail2ban/jail.d/respec-sshd.local; then systemctl restart fail2ban; fi
+F2B_OK=1
+if install_if_changed 0644 root:root "$f2b" /etc/fail2ban/jail.d/respec-sshd.local; then systemctl restart fail2ban || F2B_OK=0; fi
 rm -f "$f2b"
-systemctl enable --now fail2ban >/dev/null
+# fail2ban 은 보조 방어(열쇠 로그인만 되므로 무차별 대입은 이미 막혀 있음)라서 안 떠도 전체 세팅을 멈추지는 않고 요약에 경고로 남김
+systemctl enable --now fail2ban >/dev/null 2>&1 || F2B_OK=0
+if [[ $F2B_OK == 0 ]] || ! systemctl is-active --quiet fail2ban; then
+  F2B_OK=0
+  note "경고: fail2ban 이 안 떠 있음 (journalctl -u fail2ban 확인). 나머지 세팅은 계속함"
+fi
 
 # 22 를 먼저 열고 나서 켬 (순서가 바뀌면 접속이 끊김)
 ufw default deny incoming >/dev/null
@@ -193,6 +228,7 @@ install -d -m 0755 -o root -g root "$LIB_DIR"
 install_if_changed 0755 root:root "$SRC_DIR/deploy.sh" "$LIB_DIR/deploy.sh" && note "deploy.sh 설치(갱신)" || true
 install_if_changed 0755 root:root "$SRC_DIR/smoke.sh" "$LIB_DIR/smoke.sh" && note "smoke.sh 설치(갱신)" || true
 install_if_changed 0755 root:root "$SRC_DIR/check-env.sh" "$LIB_DIR/check-env.sh" && note "check-env.sh 설치(갱신)" || true
+install_if_changed 0644 root:root "$SRC_DIR/compose-policy.py" "$LIB_DIR/compose-policy.py" && note "compose-policy.py 설치(갱신)" || true
 
 install -d -m 0750 -o deploy -g deploy "$APP_DIR"
 # 모델 파일 폴더: root 소유 읽기 전용 (컨테이너에는 읽기 전용으로 붙음). 파일은 1-11 에서 올림
@@ -306,7 +342,7 @@ printf '   hold        %s\n' "$(apt-mark showhold | tr '\n' ' ')"
 printf '   swap        %s\n' "$(swapon --show=NAME,SIZE --noheadings | tr '\n' ' ')"
 printf '   ufw         %s\n' "$(ufw status | head -1)"
 printf '   nginx       %s\n' "$(systemctl is-active nginx)"
-printf '   fail2ban    %s\n' "$(systemctl is-active fail2ban)"
+printf '   fail2ban    %s\n' "$(systemctl is-active fail2ban || true)$([[ $F2B_OK == 1 ]] || echo '  <- 경고: 안 떠 있음')"
 printf '   certbot.timer %s\n' "$(systemctl is-enabled certbot.timer 2>/dev/null || echo 없음)"
 printf '   인증서      %s\n' "$([[ -s $CERT ]] && echo "있음 ($(openssl x509 -enddate -noout -in "$CERT" 2>/dev/null))" || echo 없음)"
 printf '   deploy 열쇠 %s\n' "$([[ -s /home/deploy/.ssh/authorized_keys ]] && echo 있음 || echo 없음)"

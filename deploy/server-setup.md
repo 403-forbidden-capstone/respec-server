@@ -1,4 +1,4 @@
-# 서버 다시 세우기 — 새 Ubuntu 24.04 (arm64)를 처음부터
+# 서버 다시 세우기 — 새 Ubuntu 24.04 / 26.04 LTS (arm64)를 처음부터
 
 서버를 지워도 이 문서와 `deploy/` 스크립트, `.env.example` 만으로 반나절 안에 같은 서버를 다시 세움(설계 N10).
 사진(AMI)으로 복제하지 않고 **레시피(bootstrap.sh)로 처음부터** 세우는 방식 — 서버에 쌓인 기록이 안 따라오고, 무엇이 깔려 있는지 코드로 읽힘.
@@ -9,6 +9,7 @@
 | `deploy/deploy.sh` | 배포 · 되돌리기 · 상태 (SSH 강제 명령) | `/usr/local/lib/respec/deploy.sh` (root 소유) |
 | `deploy/smoke.sh` | 배포 직후 점검 | `/usr/local/lib/respec/smoke.sh` |
 | `deploy/check-env.sh` | env 파일 이름 비교 (값 출력 안 함) | `/usr/local/lib/respec/check-env.sh` |
+| `deploy/compose-policy.py` | 배포 직전에 번들 compose 가 "허용한 모양"인지 점검 (호스트 마운트 · 특권 · 포트 공개 등 거부) | `/usr/local/lib/respec/compose-policy.py` |
 | `deploy/compose.yml` | 컨테이너 3개 (api · scheduler · prepare-ml) | 배포 때 번들 이미지에서 `/srv/respec/compose.yml` 로 꺼냄 |
 | `deploy/versions.env` | 예측 서버 이미지 태그 고정 | 같이 `/srv/respec/versions.env` |
 | `deploy/nginx/*.conf` | nginx 설정 | `/etc/nginx/...` (bootstrap 이 설치) |
@@ -35,7 +36,7 @@ deploy.log                          배포 기록 (비밀 없음)
 | 항목 | 값 |
 |---|---|
 | 인스턴스 이름 | `respec-server` |
-| 이미지 | Ubuntu Server 24.04 LTS 64비트(Arm) |
+| 이미지 | Ubuntu Server LTS 64비트(Arm) — 24.04 또는 26.04 (bootstrap 이 둘 다 받음. 지금 서버는 26.04.1 `resolute`) |
 | 유형 | t4g.small · 리전 서울(ap-northeast-2) |
 | 스토리지 | gp3 20GiB |
 | 크레딧 사양 | standard (무제한 모드 끔) |
@@ -58,8 +59,10 @@ ssh-keygen -t ed25519 -N "" -C "respec-server-deploy" -f ~/.ssh/respec-deploy-ke
 ssh -i ~/.ssh/respec-server-key.pem ubuntu@<탄력적 IP> 'mkdir -p /tmp/respec-src'
 scp -i ~/.ssh/respec-server-key.pem -r deploy .env.example ~/.ssh/respec-deploy-key.pub ubuntu@<탄력적 IP>:/tmp/respec-src/
 ssh -i ~/.ssh/respec-server-key.pem ubuntu@<탄력적 IP> \
-  'sudo DEPLOY_PUBKEY_FILE=/tmp/respec-src/respec-deploy-key.pub bash /tmp/respec-src/deploy/bootstrap.sh'
+  'sudo env DEPLOY_PUBKEY_FILE=/tmp/respec-src/respec-deploy-key.pub bash /tmp/respec-src/deploy/bootstrap.sh'
 ```
+
+OS 판 차이: Ubuntu 26.04 의 `sudo` 는 Rust 로 다시 쓴 `sudo-rs` 라서, 명령줄 환경 변수는 `sudo VAR=값 명령` 대신 `sudo env VAR=값 명령` 으로 넘김(어느 판에서도 되는 쪽).
 
 하는 일: apt 업그레이드 · docker-ce(공식 저장소, 버전 hold) · docker 로그 크기 제한 · swap 2GB · ufw(22 · 80 · 443) · fail2ban · ssh 강화(비밀번호 · root 로그인 끔) · nginx · certbot · `deploy` 계정(강제 명령) · `/srv/respec` · env 이름 틀(값 비어 있음) · 보안 업데이트 자동(자동 재부팅 끔).
 안 하는 것: 재부팅 · 컨테이너 시작 · 모델 파일 · ghcr 로그인 · 인증서 발급. 끝에 "재부팅이 필요함"이 나오면 지형님 OK 뒤에 따로 재부팅.
@@ -97,7 +100,7 @@ sudo -iu deploy docker login ghcr.io -u <GitHub 사용자> --password-stdin
 
 ```bash
 ssh -i ~/.ssh/respec-server-key.pem ubuntu@<탄력적 IP> \
-  'sudo CERTBOT_EMAIL=<알림 받을 메일> bash /tmp/respec-src/deploy/bootstrap.sh --issue-cert --skip-upgrade'
+  'sudo env CERTBOT_EMAIL=<알림 받을 메일> bash /tmp/respec-src/deploy/bootstrap.sh --issue-cert --skip-upgrade'
 ```
 
 - DNS 가 이 서버를 안 가리키면 발급을 안 하고 멈춤(Let's Encrypt 실패 횟수 제한 보호).
@@ -136,7 +139,8 @@ Actions 가 막혔을 때: PC 에서 `EC2_HOST=<IP> deploy/build-push.sh` (arm64
 | 상황 | 방법 |
 |---|---|
 | 배포 중 새 버전이 안 뜸 · 점검 실패 | 자동으로 직전 정상 버전 (Actions 가 실패로 끝남, `deploy.log` 에 이유) |
-| 배포는 됐는데 나중에 문제 | `ssh deploy@서버 rollback` (또는 서버에서 `sudo -u deploy /usr/local/lib/respec/deploy.sh rollback`) |
+| 배포는 됐는데 나중에 문제 | `ssh deploy@서버 rollback` (또는 서버에서 `sudo -u deploy /usr/local/lib/respec/deploy.sh rollback`). `rollback` 은 "마지막으로 점검을 통과한 버전"으로 돌리므로, 바로 직전 배포가 이미 통과 버전이었다면 같은 버전을 다시 올릴 뿐임. 한 칸 전으로 가려면 이전 태그로 `deploy <이전 태그>` (이미지는 GHCR 에 남아 있음) |
+| SSH 가 끊김 · Actions 취소 | 괜찮음: 배포는 SSH 와 분리된 worker 가 끝까지 돌아 점검 · 승격 · 되돌림까지 함. 결과는 `ssh deploy@서버 status` 와 서버 `/srv/respec/deploy.log` |
 | 첫 배포가 실패 | 되돌릴 버전이 없어 컨테이너를 내림 → 원인 수정 후 다시 |
 | env 이름이 안 맞아 배포 거부 | 위 목록(이름만)대로 서버 env 를 채우고 다시 — 돌고 있던 버전은 그대로 |
 | nginx · 스크립트를 잘못 바꿈 | 레포에서 되돌린 뒤 8절대로 다시 반영 |
@@ -147,7 +151,8 @@ Actions 가 막혔을 때: PC 에서 `EC2_HOST=<IP> deploy/build-push.sh` (arm64
 - **bootstrap.sh = 레시피, AMI = 완성 요리 사진.** 사진은 안에 뭐가 들었는지 몰라서 복제하면 옛 찌꺼기도 따라옴. 레시피는 읽으면 서버가 어떻게 됐는지 알고, 새 서버에 몇 번이든 같은 결과가 나옴.
 - **멱등성**: `mkdir -p` 처럼 두 번 돌려도 같은 결과. 그래서 중간에 멈춰도 고치고 다시 돌리면 됨. 값이 든 파일(`*.env`, 모델, 인증서)은 이미 있으면 안 건드림.
 - **SSH 강제 명령(`command=`)**: 열쇠 앞에 `command="…/deploy.sh"` 를 붙이면 그 열쇠로는 그 스크립트만 실행됨. 권한이 `deploy` 하나뿐인 API 키와 같음. 이 열쇠는 GitHub Secrets 에 있어서 브랜치를 올릴 수 있는 팀원은 워크플로로 꺼낼 수 있음 → 그래서 열쇠로 할 수 있는 일을 "태그 하나 받아서 배포"로 좁힘(`^sha-[0-9a-f]{7,40}$` 만 통과).
-- **번들 이미지**: compose 파일을 SSH 로 직접 보내게 하면 그 열쇠로 아무 컨테이너(서버 디스크 마운트 등)나 띄울 수 있어 사실상 root. 그래서 compose 를 이미지에 담아 GHCR 에 올리고(main 에서 Actions 만 올림), 서버는 태그로 받아서 꺼냄. npm 패키지 tarball 을 받아 쓰는 것과 같음.
+- **번들 이미지**: compose 파일을 SSH 로 직접 보내게 하면 그 열쇠로 아무 컨테이너(서버 디스크 마운트 등)나 띄울 수 있어 사실상 root. 그래서 compose 를 이미지에 담아 GHCR 에 올리고, 서버는 태그로 받아서 꺼낸 뒤 `compose-policy.py` 로 "허용한 모양"(서비스 3개, 포트 127.0.0.1 만, 마운트는 모델 폴더 읽기 전용뿐, 특권 옵션 없음 …)인지 점검한 다음에만 올림. npm 패키지 tarball 을 받아 쓰되 설치 전에 package.json 을 검사하는 것과 같음.
+- **이 설계가 막는 것 · 못 막는 것 (정직하게)**: 막는 것은 *열쇠가 밖으로 새는 경우*(로그 · 분실 등) — 그 열쇠로는 태그만 보낼 수 있고, compose 가 정책을 벗어나면 올라가지 않아서 서버 root 는 못 얻음. 못 막는 것은 *이 레포에서 워크플로를 돌릴 수 있는 사람이 이미지 안에 코드를 넣는 경우* — `if: github.ref == main` 은 보안이 아님(브랜치의 워크플로는 자기 파일을 씀). 그 사람은 `respec-api` 이미지에 코드를 넣어 `api.env`(Supabase 비밀키 등)를 읽게 할 수 있음(서버 root 까지는 못 감). 완전히 막으려면 `main` 보호 + 배포 열쇠를 Environment(배포 브랜치 = main)로 옮겨야 하는데, 무료 조직의 private 레포에는 둘 다 없음 → **정할 일**: 레포를 public 으로 하거나 / 유료 플랜 / 이미지 서명(cosign) 검증을 서버에 추가 / 팀원 신뢰로 두고 이 한계를 기록. 지금은 마지막 길(팀원 신뢰 + 기록)이고, 팀이 4명이라 현실적인 위험은 계정 탈취뿐(탈취되면 main 에 직접 push 도 가능해 어차피 같음).
 - **nginx 리버스 프록시**: 밖에서 HTTPS 로 받아 안쪽 `127.0.0.1:8000`(api) · `:8091`(예측)으로 넘기는 문지기(Vercel rewrites 의 서버판). 여는 주소를 화이트리스트로 정해서 목록에 없으면 404 — `/ml/models` · `/docs` 가 실수로 안 열림.
 - **인증서 자동 갱신**: Let's Encrypt 인증서는 90일. `certbot.timer`(systemd 타이머, cron 의 친척)가 하루 두 번 확인하다가 만료 30일 전쯤 갱신하고, 갱신 훅이 nginx 를 reload 해서 새 인증서를 읽게 함. `certbot renew --dry-run` 이 그 전체 길을 시험함.
 - **방화벽 3겹**: AWS 보안 그룹(밖) → ufw(서버 안) → 컨테이너 포트를 `127.0.0.1` 에만 열기. Docker 는 ufw 를 건너뛰고 포트를 여는 성질이 있어서 마지막 겹이 필요함.
