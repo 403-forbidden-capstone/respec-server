@@ -1,0 +1,33 @@
+[project]
+name = "respec-api"
+version = "0.1.0"
+description = "Re:Spec Alarm 서버 (FastAPI) — 앱 요청 처리 · 토큰 검사"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic-settings",
+    "httpx",
+    "pyjwt[crypto]",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16.0",
+    "pytest",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+# 줄 길이는 포매터가 코드에서 지킴. 한글 주석 · 문서 문자열은 칸 너비가 두 배로 세어져 E501이 과하게 걸림
+ignore = ["E501"]

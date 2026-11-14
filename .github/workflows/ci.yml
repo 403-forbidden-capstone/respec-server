@@ -1,0 +1,38 @@
+# PR · main push마다: 코드 모양(ruff) + 시험(pytest). 배포는 deploy.yml (AWS 세션 몫)
+# 자동 리뷰 · 흐름 확인 · 보드 연동 워크플로는 이 레포에 안 둠 (서버_요구사항_설계 3-1절 PR 규칙)
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v7
+      # setup-uv는 v10 같은 큰 번호 태그가 없고 정확한 버전만 있음
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - name: 의존성 (uv.lock 그대로 — 잠금 파일이 낡았으면 여기서 실패)
+        run: uv sync --frozen
+      - name: ruff 코드 검사
+        run: uv run ruff check .
+      - name: ruff 모양 검사
+        run: uv run ruff format --check .
+      - name: pytest
+        run: uv run pytest
