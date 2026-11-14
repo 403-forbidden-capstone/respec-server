@@ -80,24 +80,5 @@ deno_version = 2
 enabled = false
 port = 28327
 
-# 아래 verify_jwt는 본 레포 supabase/config.toml과 같게 둠 (함수가 늘면 같이 맞출 것)
-[functions.alarm-suggest]
-verify_jwt = true
-[functions.alarm-commit]
-verify_jwt = true
-[functions.appointment-edit]
-verify_jwt = true
-[functions.account-delete]
-verify_jwt = true
-[functions.place-search]
-verify_jwt = true
-[functions.place-reverse]
-verify_jwt = true
-[functions.notify]
-verify_jwt = true
-[functions.wake-check]
-verify_jwt = false
-[functions.alarm-roll]
-verify_jwt = false
-[functions.suggestion-generate]
-verify_jwt = false
+# [functions.*](함수별 verify_jwt)는 여기 두지 않음 - dev/local_stack.py prepare가 본 레포 supabase/config.toml에서
+# 읽어 복사본 끝에 붙임 (손으로 베끼면 본 레포가 바뀔 때마다 어긋남: 예) voice-commit · alarm-briefing-device는 false)

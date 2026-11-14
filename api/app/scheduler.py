@@ -35,7 +35,9 @@ def main() -> int:
         "scheduler 자리표시자 시작 version=%s (실제 작업은 S3에서 구현 — 지금은 아무 작업도 안 돎)",
         settings.app_version,
     )
-    stop.wait()
+    # 시간 제한 없는 stop.wait()는 Windows에서 Ctrl+C로 안 깨어남 → 짧은 주기로 돌면서 신호 핸들러가 돌 틈을 줌
+    while not stop.wait(1.0):
+        pass
     log.info("scheduler 종료")
     return 0
 

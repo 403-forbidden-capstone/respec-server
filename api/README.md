@@ -7,7 +7,7 @@
 | 주소 | 하는 일 | 토큰 |
 |---|---|---|
 | `GET` · `HEAD /health` | 프로세스가 떠 있는가만. 본문 `{"status":"ok","version":"<배포 태그>"}` (`version` = env `APP_VERSION`, 없으면 `dev`) | 없음 |
-| `GET /health/deep` | 공개 키(JWKS) · DB(PostgREST) · 스케줄러 최근 실행. 하나라도 실패면 503. 결과를 5초(`HEALTH_DEEP_CACHE_SECONDS`) 재사용(실패 포함) | 없음 |
+| `GET` · `HEAD /health/deep` | 공개 키(JWKS) · DB(PostgREST) · 스케줄러 최근 실행. 하나라도 실패면 503. 결과를 5초(`HEALTH_DEEP_CACHE_SECONDS`) 재사용(실패 포함) | 없음 |
 | `GET /me` | 토큰 주인의 `{"id": ...}` | 필요 |
 | `OPTIONS *` | CORS 사전 확인. 토큰 없이 204 | 없음 |
 
@@ -54,7 +54,7 @@
 
 | 이름 | 필수 | 뜻 |
 |---|---|---|
-| `SUPABASE_URL` | 예 | Supabase 프로젝트 주소. 로컬은 `http://127.0.0.1:54321` |
+| `SUPABASE_URL` | 예 | Supabase 프로젝트 주소. 로컬은 [`docs/local-dev.md`](../docs/local-dev.md)의 격리 스택 `http://127.0.0.1:28321` (본 레포 기본 로컬 스택 54321은 HS256 토큰이라 서버가 거절함) |
 | `SUPABASE_JWT_ISSUER` | 아니오 | 토큰의 `iss`가 `SUPABASE_URL/auth/v1`과 다를 때만 |
 | `SUPABASE_JWKS_URL` | 아니오 | 공개 키 목록 주소가 기본(`SUPABASE_URL/auth/v1/.well-known/jwks.json`)과 다를 때만 (로컬 compose: 컨테이너가 호스트의 Supabase를 부르는 주소) |
 | `SUPABASE_SECRET_KEY` | `/health/deep`에 | 서버 전용 Supabase 키(`sb_secret_…`). PostgREST로 `server_heartbeat`를 읽음. 없으면 deep의 db 검사가 실패 |
@@ -62,8 +62,8 @@
 | `JWT_LEEWAY_SECONDS` | 아니오 | 시계 어긋남 허용, 기본 10 |
 | `JWKS_CACHE_TTL_SECONDS` · `JWKS_MIN_REFETCH_SECONDS` · `HTTP_TIMEOUT_SECONDS` | 아니오 | 기본 600 · 10 · 3 |
 | `HEALTH_REQUIRE_SCHEDULER` · `SCHEDULER_STALE_MINUTES` | 아니오 | 스케줄러(S3) 배포 뒤 `true`로. 켜면 `server_heartbeat.alive_at`이 15분 넘게 멈추면 deep 실패 |
-| `APP_VERSION` | 아니오 | 배포 태그(`sha-…`). compose가 api · scheduler에 넣어 줌. `/health`의 `version`, 없으면 `dev` |
-| `HEALTH_DEEP_CACHE_SECONDS` | 아니오 | `/health/deep` 결과 재사용 시간, 기본 5 (0이면 끔) |
+| `APP_VERSION` | 아니오 | 배포 태그(`sha-…`). compose가 api · scheduler에 넣어 줌. `/health`의 `version`, 없으면 `dev`. `/health`는 토큰 없이 부를 수 있으므로 **배포 태그 말고 다른 값은 넣지 않음** |
+| `HEALTH_DEEP_CACHE_SECONDS` | 아니오 | `/health/deep` 결과 재사용 시간(초), 기본 5, **0~60만 받음**. 0은 캐시만 끔(확인은 한 번에 하나씩 순서대로 함) |
 | `LOG_LEVEL` | 아니오 | 기본 `INFO` (대소문자 무관, DEBUG · INFO · WARNING · ERROR · CRITICAL) |
 
 ## 컨테이너 (`Dockerfile`)

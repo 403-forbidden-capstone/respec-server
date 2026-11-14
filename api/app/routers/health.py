@@ -1,7 +1,7 @@
 """상태 확인 — 토큰 없이 부름 (nginx · smoke.sh · 모니터링)
 
   GET · HEAD /health  프로세스가 떠 있는가만 (DB · 외부를 안 부름 → 배포 직후 · 컨테이너 헬스체크용). 본문에 version(배포 태그)
-  GET /health/deep    공개 키(JWKS) · DB(PostgREST) · 스케줄러 최근 실행까지. 하나라도 실패하면 503.
+  GET · HEAD /health/deep  공개 키(JWKS) · DB(PostgREST) · 스케줄러 최근 실행까지. 하나라도 실패하면 503.
                       토큰 없이 부를 때마다 서버 키로 DB를 부르므로 결과를 짧게(기본 5초) 재사용 — 실패 결과도 (장애 중 DB를 두드리지 않게)
 응답에는 검사 이름과 ok / fail만 — 주소 · 키 · 오류 원문은 안 실음.
 """
@@ -71,7 +71,9 @@ def _scheduler_ok(rows: list[dict], stale_minutes: int) -> bool:
     return datetime.now(UTC) - at <= timedelta(minutes=stale_minutes)
 
 
-@router.get("/health/deep")
+@router.api_route(
+    "/health/deep", methods=["GET", "HEAD"]
+)  # 감시가 이 주소를 부르므로 HEAD도 받음 (같은 캐시를 씀)
 async def health_deep(request: Request) -> EdgeJSONResponse:
     settings = request.app.state.settings
     ttl = settings.health_deep_cache_seconds
