@@ -34,7 +34,9 @@ assert_contains "예측 본문 4k 제한" "$conf" 'client_max_body_size 4k;'
 glob=$(cat "$NG/respec-global.conf")
 assert_contains "로그에 쿼리스트링이 없음 (\$uri)" "$glob" '"$request_method $uri"'
 assert_not_contains "로그에 \$request(쿼리 포함)를 안 씀" "$glob" '$request '
-assert_contains "버전 숨김" "$glob" 'server_tokens off;'
+assert_not_contains "공통 설정에 server_tokens 를 안 둠(Ubuntu 26.04 nginx.conf 와 중복돼 실패함)" "$glob" 'server_tokens off;'
+assert_eq "버전 숨김: 서버 블록마다(443 포함 4개)" 4 "$(grep -c 'server_tokens off;' "$NG/respec-api.conf")"
+assert_eq "버전 숨김: HTTP 모양 서버 블록마다(2개)" 2 "$(grep -c 'server_tokens off;' "$NG/respec-api.http.conf")"
 
 echo "[3b] 요청 수 제한 · 쿼리스트링 거절 · 기본 서버 접속 기록 끔"
 block() { awk -v lit="$1" 'index($0, lit) {on=1} on {print} on && /^    }/ {exit}' "$NG/respec-api.conf"; }
@@ -60,6 +62,8 @@ else
       "nginx:$ver" sh -c '
         set -e
         rm -f /etc/nginx/conf.d/default.conf
+        # Ubuntu 26.04 의 nginx.conf 는 http 수준에 server_tokens 를 이미 적어 둠 — 같은 조건으로 검사
+        sed -i "0,/^http {/s//http {\n    server_tokens build;/" /etc/nginx/nginx.conf
         d=/etc/letsencrypt/live/api.respecalarm.com
         mkdir -p "$d" /var/www/certbot
         openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=api.respecalarm.com \
