@@ -176,7 +176,12 @@ def _start_scheduler() -> tuple[subprocess.Popen, _Output]:
     proc = subprocess.Popen(
         [sys.executable, "-m", "app.scheduler"],
         cwd=API_DIR,
-        env=_scheduler_env(SUPABASE_URL="http://x.test", APP_VERSION="sha-1234567"),
+        env=_scheduler_env(
+            SUPABASE_URL="http://127.0.0.1:9",  # 아무도 안 듣는 주소 — DB 호출은 바로 실패해도 스케줄러는 떠 있어야 함
+            SUPABASE_SECRET_KEY="sb_secret_test_value",
+            HTTP_TIMEOUT_SECONDS="0.5",
+            APP_VERSION="sha-1234567",
+        ),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
@@ -201,7 +206,7 @@ def test_scheduler_module_starts_and_stays_up():
 def test_scheduler_exits_zero_with_log_on_sigterm():
     """`docker stop`이 보내는 신호 — 핸들러가 없으면 -15로 죽고(deploy.sh의 정상 종료 경로가 깨짐) 로그도 없음"""
     proc, output = _start_scheduler()
-    assert output.wait_for("자리표시자 시작")
+    assert output.wait_for("scheduler 시작")
     proc.send_signal(signal.SIGTERM)
     assert proc.wait(timeout=10) == 0
     assert "scheduler 종료" in output.text()
@@ -209,7 +214,9 @@ def test_scheduler_exits_zero_with_log_on_sigterm():
 
 def test_scheduler_registers_handlers_and_exits_zero_when_signalled(monkeypatch):
     """모든 OS에서 도는 쪽: 두 신호(SIGTERM · SIGINT) 핸들러가 등록되고, 신호를 받으면 0으로 끝남"""
-    monkeypatch.setenv("SUPABASE_URL", "http://x.test")
+    monkeypatch.setenv("SUPABASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test_value")
+    monkeypatch.setenv("HTTP_TIMEOUT_SECONDS", "0.5")
     handlers: dict[int, object] = {}
     monkeypatch.setattr(
         scheduler.signal, "signal", lambda signum, handler: handlers.__setitem__(signum, handler)
@@ -250,6 +257,19 @@ def test_scheduler_without_settings_exits_nonzero_without_echoing_values():
     )
     assert proc.returncode != 0
     assert secret.encode() not in proc.stdout + proc.stderr
+
+
+def test_scheduler_without_secret_key_exits_one_with_reason():
+    """키 없이 떠 있기만 하는 스케줄러는 하트비트도 스위치 읽기도 못 하면서 정상처럼 보임 → 바로 죽어서 배포 직후 점검에 드러나게"""
+    proc = subprocess.run(
+        [sys.executable, "-m", "app.scheduler"],
+        cwd=API_DIR,
+        env=_scheduler_env(SUPABASE_URL="http://x.test"),
+        capture_output=True,
+        timeout=20,
+    )
+    assert proc.returncode == 1
+    assert "SUPABASE_SECRET_KEY가 없어".encode() in proc.stdout + proc.stderr
 
 
 # ---------- 빈 문자열 env는 "없음" (compose가 값이 비면 빈 문자열을 넣어도 기본값이 쓰이게) ----------

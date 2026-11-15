@@ -57,20 +57,45 @@
 | `SUPABASE_URL` | 예 | Supabase 프로젝트 주소. 로컬은 [`docs/local-dev.md`](../docs/local-dev.md)의 격리 스택 `http://127.0.0.1:28321` (본 레포 기본 로컬 스택 54321은 HS256 토큰이라 서버가 거절함) |
 | `SUPABASE_JWT_ISSUER` | 아니오 | 토큰의 `iss`가 `SUPABASE_URL/auth/v1`과 다를 때만 |
 | `SUPABASE_JWKS_URL` | 아니오 | 공개 키 목록 주소가 기본(`SUPABASE_URL/auth/v1/.well-known/jwks.json`)과 다를 때만 (로컬 compose: 컨테이너가 호스트의 Supabase를 부르는 주소) |
-| `SUPABASE_SECRET_KEY` | `/health/deep`에 | 서버 전용 Supabase 키(`sb_secret_…`). PostgREST로 `server_heartbeat`를 읽음. 없으면 deep의 db 검사가 실패 |
+| `SUPABASE_SECRET_KEY` | scheduler는 예, api는 `/health/deep`에 | 서버 전용 Supabase 키(`sb_secret_…`). PostgREST로 `server_routes` · `server_heartbeat`를 읽고 `server_heartbeat`에 씀(scheduler), `/health/deep`이 `server_heartbeat`를 읽음(api). 없으면 **scheduler는 시작하지 않고 종료 코드 1**, api는 deep의 db 검사가 실패 |
 | `JWT_AUDIENCE` | 아니오 | 기본 `authenticated` |
 | `JWT_LEEWAY_SECONDS` | 아니오 | 시계 어긋남 허용, 기본 10 |
 | `JWKS_CACHE_TTL_SECONDS` · `JWKS_MIN_REFETCH_SECONDS` · `HTTP_TIMEOUT_SECONDS` | 아니오 | 기본 600 · 10 · 3 |
-| `HEALTH_REQUIRE_SCHEDULER` · `SCHEDULER_STALE_MINUTES` | 아니오 | 스케줄러(S3) 배포 뒤 `true`로. 켜면 `server_heartbeat.alive_at`이 15분 넘게 멈추면 deep 실패 |
+| `HEALTH_REQUIRE_SCHEDULER` · `SCHEDULER_STALE_MINUTES` | 아니오 | 스케줄러(S3, 1-10)가 배포돼 `alive_at`이 올라오는 것을 확인한 뒤 `true`로. 켜면 `server_heartbeat.alive_at`이 15분 넘게 멈추면 deep 실패 |
 | `APP_VERSION` | 아니오 | 배포 태그(`sha-…`). compose가 api · scheduler에 넣어 줌. `/health`의 `version`, 없으면 `dev`. `/health`는 토큰 없이 부를 수 있으므로 **배포 태그 말고 다른 값은 넣지 않음** |
 | `HEALTH_DEEP_CACHE_SECONDS` | 아니오 | `/health/deep` 결과 재사용 시간(초), 기본 5, **0~60만 받음**. 0은 캐시만 끔(확인은 한 번에 하나씩 순서대로 함) |
 | `LOG_LEVEL` | 아니오 | 기본 `INFO` (대소문자 무관, DEBUG · INFO · WARNING · ERROR · CRITICAL) |
+
+## 스케줄러 (`app/scheduler.py` · `jobs.py` · `db.py`, S3 · 완결점 1-10)
+
+예약 작업을 도는 프로세스(하나라 중복 없음). 설계 7절. 웹 비유: pg_cron(Supabase)이 "5분마다 Edge 함수를 부르는 알람"이라면, 이 프로세스는 같은 일을 서버가 대신 하되 **표(`server_routes`)가 허락한 작업만** 하는 일꾼임.
+
+| 하는 일 | 내용 |
+|---|---|
+| 하트비트 | 1분마다 `server_heartbeat.alive_at`에 지금 시각을 씀(작업 줄 3개 전부, mode와 상관없이). `/health/deep`이 이것이 15분 넘게 멈추면 실패로 답함(`HEALTH_REQUIRE_SCHEDULER=true`일 때). `last_success_at`은 이 경로가 안 건드림 |
+| 작업 정시 | UTC 정시에 깨어남: `wake-check` · `alarm-roll` 5분마다(`:00 :05 …`, pg_cron `*/5`와 같은 시각), `suggestion-generate` 매일 09:00 UTC = 18:00 KST. 돌 때마다 `server_routes`(`kind = 'job'`)를 새로 읽음 |
+| `edge` | 아무것도 안 함 (pg_cron이 Edge를 부름). 표에 줄이 없어도 같음 |
+| `shadow` | 세기만 함(쓰기 · 푸시 없음). 지금 구현된 것은 `wake-check`뿐: `find_missed_wake_alarms(p_now := 다음 정시, 24시간)`의 행 수를 로그 한 줄로 — `shadow job=wake-check boundary=2026-11-15T03:05:00Z checked=2`. 알람 · 사용자 번호는 안 찍고 수만 |
+| `server` | 서버가 실제로 함 — 틀만 있고 구현된 작업은 아직 없음(3차). 구현이 없는 작업이 `server`로 정해지면 `shadow`로 **낮추고 오류 로그**(`서버 구현 없는 작업이 server로 설정됨 → shadow로 낮춤`), `last_success_at`은 안 씀 → pg_cron이 계속 Edge를 부름 |
+| 표를 못 읽음 · 모르는 값 | `edge`로 봄 (서버는 아무것도 안 함) |
+| 되돌리기 | `update server_routes set mode = 'edge' where kind = 'job' and name = '…'` — 다음 회차부터 서버는 안 함. 서버가 멈춰도 pg_cron이 Edge로 이어받음 |
+
+**shadow가 정시보다 30초 먼저 세는 이유**: pg_cron이 정시에 Edge `wake-check`를 부르면 Edge가 MISSED를 기록해서, 그 뒤에 서버가 세면 후보가 0이 됨(이미 기록된 것은 `find_missed_wake_alarms`가 뺌). 그래서 정시 30초 전에 **정시를 기준 시각으로** 세어 Edge가 정시에 보게 될 후보와 같은 수를 얻음. 정시 60초 넘게 늦게 깨어나면 그 회차는 건너뜀(`회차 놓침` 로그).
+
+**Edge와 대조하는 법 (24시간 shadow, 완결점 1-10 ①)**: 서버 쪽은 `docker logs`의 `shadow job=wake-check` 줄(정시 `boundary=`와 `checked=`), Edge 쪽은 Supabase SQL 편집기의 `net._http_response`(보관이 짧아 몇 시간 안에 모음)에서 같은 정시의 `checked`:
+```sql
+select created, (content::jsonb->>'checked')::int as checked, (content::jsonb->>'recorded')::int as recorded
+from net._http_response where content::text like '{"checked"%' order by created desc limit 40;
+```
+같은 정시에서 수가 다르면 이유를 적음(Edge가 먼저 기록 · 그 사이 알람 상태가 바뀜 등).
+
+실패는 루프를 안 멈춤: DB 호출 실패 · 작업의 예외는 로그(오류 종류만)를 남기고 다음 회차로 감. 하트비트 쓰기 실패는 1분 뒤 다시 시도(`alive_at`이 멈추면 감시가 알림). `last_success_at`은 서버 시계로 씀(EC2는 NTP 동기화 — `run_job`의 12분 창에 비해 오차가 작음).
 
 ## 컨테이너 (`Dockerfile`)
 
 api와 scheduler가 같은 이미지를 쓰고 시작 명령만 다름. 빌드 컨텍스트는 `api/`: `docker build -f api/Dockerfile api`.
 - api: 기본 CMD `uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000 --no-access-log` (포트 8000)
-- scheduler: compose가 `python -m app.scheduler`로 덮어씀. **지금은 자리표시자** — 작업 없이 떠 있다가 SIGTERM에 정상 종료. 실제 작업(`alive_at` 갱신 · wake-check · alarm-roll · 제안)은 S3(1-10)에서 구현
+- scheduler: compose가 `python -m app.scheduler`로 덮어씀. 아래 "스케줄러" 절. `SUPABASE_SECRET_KEY`가 없으면 바로 종료(코드 1) → 배포 직후 점검("running · 재시작 0")에서 드러남
 - 비밀값은 이미지에 없음(실행할 때 env로), 비루트 사용자(uid 10001), 개발 도구 없음. 이미지 안 `python`이 PATH에 있음(compose 헬스체크가 씀)
 
 ## 개발
