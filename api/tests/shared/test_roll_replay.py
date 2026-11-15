@@ -82,7 +82,7 @@ class Env:
 
 
 def setup(now: datetime, users: list[str]) -> Env:
-    db = FakeDb().with_roll_rpc()
+    db = FakeDb().with_roll_rpc().with_commit_rpc()
     db.now = now
     for user_id in users:
         db.rows("profiles").append(

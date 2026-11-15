@@ -28,7 +28,7 @@ USER = "u-me"
 
 def setup(now=None):
     now = now or kst(22, 400)
-    db = FakeDb()
+    db = FakeDb().with_commit_rpc()
     db.rows("profiles").append(
         {
             "user_id": USER,

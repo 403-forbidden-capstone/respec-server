@@ -4,6 +4,9 @@ DB는 FakeDb. 로그인 토큰은 conftest의 가짜 서명 키.
 순서는 Edge와 같음: 토큰 확인(401) → 입력 검사(400) → 계산 · 읽기 → 오류 번역.
 """
 
+import hashlib
+import json
+
 import pytest
 
 from tests.fake_db import FakeDb
@@ -41,7 +44,7 @@ FULL = {
 @pytest.fixture
 def api(make_client, signer, monkeypatch):
     """api.post(path, body)로 토큰을 실어 부름. DB는 api.db(FakeDb) 하나를 부른 사람 · 서버 클라이언트가 같이 씀, 시계는 api.clock"""
-    db = FakeDb()
+    db = FakeDb().with_commit_rpc()
     db.rows("profiles").append(
         {
             "user_id": USER_ID,
@@ -67,8 +70,8 @@ def api(make_client, signer, monkeypatch):
     client = make_client()
 
     class Api:
-        def post(self, path, body=None, *, raw=None, token=True):
-            headers = bearer(signer.token()) if token else {}
+        def post(self, path, body=None, *, raw=None, token=True, headers=None):
+            headers = {**(bearer(signer.token()) if token else {}), **(headers or {})}
             if raw is not None:
                 return client.post(path, content=raw, headers={**headers, "content-type": "application/json"})
             return client.post(path, json=body, headers=headers)
@@ -270,3 +273,93 @@ def test_commit_standalone_past_time_is_422(api):
     body = {"type": "STANDALONE", "alarm": {"scheduled_at": iso(22, 300)}}
     error = error_of(api.post(COMMIT, body), 422, "UNPROCESSABLE")
     assert error["details"]["reason"] == "PAST_TIME"
+
+
+# ---------- 요청 키 (Idempotency-Key) · DB 함수 인자 ----------
+
+STANDALONE = {"type": "STANDALONE", "alarm": {"scheduled_at": iso(23, 420)}}
+
+
+def last_rpc(api):
+    (call,) = [c for c in api.db.rpc_calls if c["name"] == "alarm_commit_apply"][-1:]
+    return call["args"]
+
+
+def test_router_sends_the_key_and_a_canonical_body_hash_to_the_db_function(api):
+    key = "req-2026.11:15_abcdef"
+    res = api.post(COMMIT, FULL, headers={"Idempotency-Key": key})
+    assert res.status_code == 200, res.text
+    args = last_rpc(api)
+    canonical = json.dumps(FULL, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    assert args["p_key"] == key
+    assert args["p_request_hash"] == hashlib.sha256(canonical.encode()).hexdigest()
+    # 키 순서 · 공백이 달라도 같은 내용이면 같은 해시
+    reordered = json.dumps(dict(reversed(list(FULL.items()))), indent=3).encode()
+    api.post(COMMIT, raw=reordered, headers={"Idempotency-Key": key})
+    assert last_rpc(api)["p_request_hash"] == args["p_request_hash"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["short12", "a" * 101, "has space 123", "bad/char/12345", "bad+char+12345"],
+)
+def test_router_ignores_an_invalid_key_header(api, value):
+    res = api.post(COMMIT, FULL, headers={"Idempotency-Key": value})
+    assert res.status_code == 200, res.text
+    assert [last_rpc(api)["p_key"], last_rpc(api)["p_request_hash"]] == [None, None]
+
+
+@pytest.mark.parametrize("value", ["a" * 8, "a" * 100, "Ab0_.:-xyz"])
+def test_router_accepts_keys_at_the_length_and_charset_limits(api, value):
+    api.post(COMMIT, FULL, headers={"Idempotency-Key": value})
+    assert last_rpc(api)["p_key"] == value
+
+
+def test_router_without_a_header_sends_no_key_and_does_not_deduplicate(api):
+    api.post(COMMIT, FULL)
+    api.post(COMMIT, FULL)
+    assert [last_rpc(api)["p_key"], last_rpc(api)["p_request_hash"]] == [None, None]
+    assert len(api.db.rows("appointments")) == 2
+
+
+def test_resending_with_the_same_key_returns_the_same_body_and_saves_once(api):
+    headers = {"Idempotency-Key": "retry-key-0001"}
+    first = api.post(COMMIT, FULL, headers=headers)
+    second = api.post(COMMIT, FULL, headers=headers)
+    assert (first.status_code, second.status_code) == (200, 200)
+    assert second.json() == first.json()
+    assert len(api.db.rows("appointments")) == 1
+    assert len(api.db.rows("alarms")) == 4
+
+
+def test_same_key_with_another_body_is_409_conflict(api):
+    headers = {"Idempotency-Key": "retry-key-0002"}
+    api.post(COMMIT, FULL, headers=headers)
+    other = {**FULL, "appointment": {**FULL["appointment"], "title": "다른 약속"}}
+    error = error_of(api.post(COMMIT, other, headers=headers), 409, "CONFLICT")
+    assert error["message"] == "같은 요청 키로 다른 내용을 보냈어요. 새로고침한 뒤 다시 시도해 주세요"
+    assert len(api.db.rows("appointments")) == 1
+
+
+def test_standalone_with_a_key_is_saved_once(api):
+    headers = {"Idempotency-Key": "retry-key-0003"}
+    first = api.post(COMMIT, STANDALONE, headers=headers)
+    second = api.post(COMMIT, STANDALONE, headers=headers)
+    assert second.json() == first.json()
+    assert len(api.db.rows("alarms")) == 1
+    assert last_rpc(api)["p_mode"] == "STANDALONE"
+
+
+@pytest.mark.parametrize(
+    "odd",
+    [b"\xff", rb"\ud800"],  # 깨진 UTF-8 바이트 · 짝 없는 반쪽 글자(JSON 이스케이프)
+    ids=["invalid-utf8", "lone-surrogate"],
+)
+def test_a_key_does_not_turn_an_odd_body_into_a_500(api, odd):
+    """키를 붙여도 본문을 다시 파싱하지 않음 — 키 없을 때와 같은 결과(500 아님)"""
+    body = json.dumps({**FULL, "appointment": {**FULL["appointment"], "title": "@@"}}).encode()
+    raw = body.replace(b"@@", b"x" + odd)
+    without = api.post(COMMIT, raw=raw)
+    with_key = api.post(COMMIT, raw=raw, headers={"Idempotency-Key": f"odd-key-{len(odd):04d}"})
+    assert without.status_code != 500, without.text
+    assert with_key.status_code == without.status_code, with_key.text

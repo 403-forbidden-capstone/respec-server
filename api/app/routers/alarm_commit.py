@@ -5,9 +5,12 @@
 일정 없는 알람(type STANDALONE): 시각 + 반복(RRULE)만으로 기상 알람 하나 (D46 · Q10 B). 약속 · 루틴과 연결하지 않음
 응답: 저장된 알람 + ring_packages(폰에 걸 예약 꾸러미, 알람 코어 RingPackage) + canceled_alarm_ids(폰에서 지울 예약, 반드시 같이 줌)
 오류: VALIDATION_FAILED · NOT_FOUND · FORBIDDEN · UNPROCESSABLE(출발 시각까지 지남 · 알람 순서 어긋남) · ROUTE_UNAVAILABLE(이동시간을 정할 수 없음)
-쓰기는 service_role로 하되, 읽기(약속 · 내 기록)는 부른 사람의 RLS로 해서 남의 일정에는 닿지 못함. 쓰는 순서 · 되돌리기는 app/shared/commit.py
+쓰기는 service_role로 하되, 읽기(약속 · 내 기록)는 부른 사람의 RLS로 해서 남의 일정에는 닿지 못함. 쓰기는 DB 함수 alarm_commit_apply 하나(한 트랜잭션)로 — app/shared/commit.py. Idempotency-Key 헤더(8~100자)가 있으면 같은 요청을 다시 보내도 첫 결과를 돌려줌
 """
 
+import hashlib
+import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -43,11 +46,30 @@ def _field(obj: Any, *names: str) -> Any:
     return None
 
 
+_KEY_PATTERN = re.compile(r"[A-Za-z0-9_.:-]{8,100}")
+
+
+def idempotency_key_of(request: Request) -> str | None:
+    """Idempotency-Key 헤더 — 8 ~ 100자, [A-Za-z0-9_.:-]만. 아니면 없는 것으로 (오류 내지 않음)"""
+    value = request.headers.get("idempotency-key")
+    return value if value is not None and _KEY_PATTERN.fullmatch(value) else None
+
+
+def request_hash_of(value: Any) -> str:
+    """read_json이 읽은 요청 값 → 키 정렬 · 공백 없는 JSON 글자 → sha256 hex (같은 키로 다른 내용을 보냈는지 DB 함수가 비교).
+    본문을 다시 파싱하지 않음 — read_json이 받아 준 본문(깨진 UTF-8 · 짝 없는 반쪽 글자 포함)이 키를 붙였다고 500이 되지 않게"""
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
 @router.post("/fn/alarm-commit")
 async def alarm_commit(request: Request, user: CurrentUser) -> dict[str, Any]:
-    root = Reader.root(read_json(await request.body()))
+    raw = read_json(await request.body())
+    root = Reader.root(raw)
     parsed = read_commit_request(root)
     root.finish()
+    key = idempotency_key_of(request)
+    request_hash = request_hash_of(raw) if key else None
 
     user_db = create_user_client(bearer_of(request))
     ctx = CommitCtx(user_id=user.user_id, user_db=user_db, service=create_service_client(), now=_now())
@@ -55,7 +77,12 @@ async def alarm_commit(request: Request, user: CurrentUser) -> dict[str, Any]:
     if _field(parsed, "type") == "STANDALONE":
         time_zone = safe_time_zone((await load_profile(user_db, user.user_id))["timezone"])
         return await commit_standalone(
-            ctx, alarm=_field(parsed, "alarm"), edits=_field(parsed, "edits"), time_zone=time_zone
+            ctx,
+            alarm=_field(parsed, "alarm"),
+            edits=_field(parsed, "edits"),
+            time_zone=time_zone,
+            key=key,
+            request_hash=request_hash,
         )
 
     draft = _field(parsed, "draft")
@@ -99,4 +126,6 @@ async def alarm_commit(request: Request, user: CurrentUser) -> dict[str, Any]:
         replace_existing=_field(parsed, "replace_existing", "replaceExisting"),
         edits=_field(parsed, "edits"),
         time_zone=built.time_zone,
+        key=key,
+        request_hash=request_hash,
     )
