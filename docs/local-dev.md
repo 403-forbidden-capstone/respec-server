@@ -22,11 +22,28 @@
 
 - Docker Desktop (켜 둔 상태). 켜면 이전에 쓰던 다른 컨테이너가 같이 켜질 수 있음
 - Node.js (`npx`) — Supabase CLI를 `npx supabase@2.119.0`으로 부름 (본 레포 README와 같은 버전)
-- `uv` (서버용 Python 3.12는 uv가 받아 줌)
+- `uv` (서버용 Python 3.12는 uv가 받아 줌). `pip install --user uv`로 깔았다면 PATH에 안 잡힐 수 있음 — 그럴 때 아래 명령의 `uv`를 `python -m uv`로 바꿔 씀(Windows는 `py -3 -m uv`)
 - Python 3.10 이상 (`python` 또는 `python3`) — `dev/local_stack.py`를 돌림. 표준 라이브러리만 써서 설치할 것은 없음
-- 본 레포(`respec-alarm-capstone`)를 **최신 main으로 받은** 폴더 — 마이그레이션 · 함수 복사에 씀. 오래된 상태면 `server_heartbeat` 같은 새 표가 없어 `/health/deep`이 실패함
+- 본 레포(`respec-alarm-capstone`)를 **최신 main으로 받은** 폴더 — 마이그레이션 · 함수 복사에 씀. 오래된 상태면 `server_heartbeat` 같은 새 표가 없어 `/health/deep`이 실패함. 새로 받을 때는 `git clone --depth 1 https://github.com/403-forbidden-capstone/respec-alarm-capstone.git <본 레포>`(얕게 받아도 됨, 8초)
 
 명령 블록은 bash(Git Bash · macOS · Linux) 기준임. Windows PowerShell 5.1에서는 `&&`를 `;`로, `grep`을 `Select-String`으로 바꿔 씀(`python`을 못 찾으면 `py`).
+
+## 걸리는 시간 (3-7 ④ 기록)
+
+새 폴더에 서버 레포 · 본 레포를 받아 이 문서의 1 ~ 6단계를 그대로 한 기록(11/15, Windows 11 · Docker Desktop, 이미지 · uv · npx 캐시가 있는 상태):
+
+| 단계 | 걸린 시간 |
+|---|---|
+| 0 두 레포 받기 | 8초 |
+| 1 `uv sync` + `pytest`(1113 통과 · 1 건너뜀) | 14초 |
+| 2 `prepare` | 5초 |
+| 3 `start` (DB 볼륨이 있어 백업에서 시작) | 28초 |
+| 4 `env` | 3초 |
+| 5 서버 띄우기(A) → `/health` 200 | 1초 |
+| 6 `check` (7개 전부 통과) | 4초 |
+| **합계** | **64초** |
+
+처음 하는 PC는 Supabase 이미지 받기 · uv의 Python 3.12 받기가 더해져 몇 분 더 걸림. 막힌 곳은 `uv`가 PATH에 없던 것 하나(위 준비물에 반영).
 
 ## 순서 (처음부터)
 
@@ -95,7 +112,7 @@ npx supabase@2.119.0 --workdir dev/.stack functions serve
 
 서버가 Edge를 부르는 시험(스위치 `edge`/`shadow`/`server` 경우 시험 등)은 **이 단계를 먼저** 해 둘 것 — 꺼져 있으면 Edge 호출이 실패함. 로컬 토큰으로 함수 안까지 부르는 확인은 `dev/local_stack.py`의 `_local_user_token`(시험 계정 로그인)을 쓰는 코드로 함. 토큰을 화면에 찍는 명령은 일부러 만들지 않았고, 시험 계정 여러 명 · 시드가 필요한 계약 시험(Edge와 서버 결과 대조)은 `dev/contract/`에 있음 — 사용법은 `dev/contract/README.md`.
 
-**8. 끝내기**
+**8. 끝내기** — 5단계 A를 터미널 앞에서 띄웠다면 Ctrl-C, 백그라운드로 띄웠다면 그 프로세스를 끝냄
 ```bash
 docker compose -f compose.local.yml down                       # B를 썼다면
 npx supabase@2.119.0 --workdir dev/.stack stop                 # DB 데이터 유지 (다음에 start하면 이어짐)
