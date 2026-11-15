@@ -20,7 +20,9 @@ Handler = Callable[[Db, datetime], str | None]  # (DB, 기준 시각) → 로그
 class Job:
     name: str
     next_boundary: Callable[[datetime], datetime]  # t보다 뒤인 가장 가까운 정시 (UTC)
-    lead_seconds: int = 0  # 정시보다 이만큼 먼저 돎 — shadow가 Edge(pg_cron)가 기록하기 전에 세려고
+    # 정시보다 이만큼 먼저 돎 — shadow가 Edge(pg_cron)가 기록하기 전에 세려고. 그래서 정시가 마감: 정시를 넘기면 그 회차는 놓친 것.
+    # server 손잡이는 지금 시각을 받음(앞당긴 채 정시 값을 받으면 아직 안 온 후보까지 처리하게 됨 — scheduler.py)
+    lead_seconds: int = 0
     shadow: Handler | None = None
     server: Handler | None = None
 

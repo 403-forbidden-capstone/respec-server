@@ -16,6 +16,10 @@ from .core.supabase import rest_headers, rest_url
 log = logging.getLogger("respec.db")
 
 
+# InvalidURL(SUPABASE_URL이 이상함)은 HTTPError가 아니라서 따로 — 안 잡으면 DbError로 안 바뀌어 틱 · 회차가 날아감
+_CALL_ERRORS = (httpx.HTTPError, httpx.InvalidURL)
+
+
 class DbError(Exception):
     """DB를 못 불렀음 (네트워크 · 상태 코드 · 모양) — 호출한 쪽이 작업 하나를 건너뛰고 계속 돎"""
 
@@ -41,7 +45,7 @@ class Db:
         except httpx.HTTPStatusError as exc:
             # 상태 번호는 남김 (401 = 키 문제 · 404 = 표 없음 · 5xx = Supabase 쪽을 가르는 데 필요). 주소 · 본문은 안 남김
             raise DbError(f"HTTPStatusError {exc.response.status_code}") from None
-        except httpx.HTTPError as exc:
+        except _CALL_ERRORS as exc:
             raise DbError(type(exc).__name__) from None
         return response
 
@@ -54,7 +58,12 @@ class Db:
             raise DbError("모양 이상") from None
         if not isinstance(rows, list):
             raise DbError("모양 이상")
-        return {r["name"]: r["mode"] for r in rows if isinstance(r, dict) and isinstance(r.get("name"), str)}
+        # name · mode가 문자열인 줄만 (mode가 없는 줄은 표에 없는 것과 같이 edge로 봄 — KeyError로 회차가 날아가지 않게)
+        return {
+            r["name"]: r["mode"]
+            for r in rows
+            if isinstance(r, dict) and isinstance(r.get("name"), str) and isinstance(r.get("mode"), str)
+        }
 
     def heartbeat(self, names: list[str], at: datetime) -> None:
         """alive_at = 스케줄러가 돌고 있음 (mode 무관). last_success_at은 안 건드림"""

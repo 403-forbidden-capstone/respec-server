@@ -69,27 +69,36 @@
 ## 스케줄러 (`app/scheduler.py` · `jobs.py` · `db.py`, S3 · 완결점 1-10)
 
 예약 작업을 도는 프로세스(하나라 중복 없음). 설계 7절. 웹 비유: pg_cron(Supabase)이 "5분마다 Edge 함수를 부르는 알람"이라면, 이 프로세스는 같은 일을 서버가 대신 하되 **표(`server_routes`)가 허락한 작업만** 하는 일꾼임.
+설계 7절은 APScheduler라고 했으나 **직접 만든 1초 틱 루프**임: 의존성이 늘지 않고, 가짜 시계로 정시 · 늦음 · 시계 역행을 결정적으로 시험할 수 있고, SIGTERM · Windows Ctrl+C로 바로 정상 종료됨. 정시는 5분 · 하루 한 번뿐이라 스케줄 문법이 필요 없음.
 
 | 하는 일 | 내용 |
 |---|---|
-| 하트비트 | 1분마다 `server_heartbeat.alive_at`에 지금 시각을 씀(작업 줄 3개 전부, mode와 상관없이). `/health/deep`이 이것이 15분 넘게 멈추면 실패로 답함(`HEALTH_REQUIRE_SCHEDULER=true`일 때). `last_success_at`은 이 경로가 안 건드림 |
+| 하트비트 | 1분마다 `server_heartbeat.alive_at`에 지금 시각을 씀(작업 줄 3개 전부, mode와 상관없이). `/health/deep`이 이것이 15분 넘게 멈추면 실패로 답함(`HEALTH_REQUIRE_SCHEDULER=true`일 때). `last_success_at`은 이 경로가 안 건드림. 표에는 마지막 값 하나만 남으므로 성공은 5분에 한 줄 `heartbeat ok at=…`(INFO)로 로그에 남김 |
 | 작업 정시 | UTC 정시에 깨어남: `wake-check` · `alarm-roll` 5분마다(`:00 :05 …`, pg_cron `*/5`와 같은 시각), `suggestion-generate` 매일 09:00 UTC = 18:00 KST. 돌 때마다 `server_routes`(`kind = 'job'`)를 새로 읽음 |
 | `edge` | 아무것도 안 함 (pg_cron이 Edge를 부름). 표에 줄이 없어도 같음 |
 | `shadow` | 세기만 함(쓰기 · 푸시 없음). 지금 구현된 것은 `wake-check`뿐: `find_missed_wake_alarms(p_now := 다음 정시, 24시간)`의 행 수를 로그 한 줄로 — `shadow job=wake-check boundary=2026-11-15T03:05:00Z checked=2`. 알람 · 사용자 번호는 안 찍고 수만 |
-| `server` | 서버가 실제로 함 — 틀만 있고 구현된 작업은 아직 없음(3차). 구현이 없는 작업이 `server`로 정해지면 `shadow`로 **낮추고 오류 로그**(`서버 구현 없는 작업이 server로 설정됨 → shadow로 낮춤`), `last_success_at`은 안 씀 → pg_cron이 계속 Edge를 부름 |
+| `server` | 서버가 실제로 함(지금 시각 기준으로 처리) — 틀만 있고 구현된 작업은 아직 없음(3차). 구현이 없는 작업이 `server`로 정해지면 `shadow`로 **낮추고 오류 로그**(`서버 구현 없는 작업이 server로 설정됨 → shadow로 낮춤`), `last_success_at`은 안 씀 → pg_cron이 계속 Edge를 부름 |
 | 표를 못 읽음 · 모르는 값 | `edge`로 봄 (서버는 아무것도 안 함) |
 | 되돌리기 | `update server_routes set mode = 'edge' where kind = 'job' and name = '…'` — 다음 회차부터 서버는 안 함. 서버가 멈춰도 pg_cron이 Edge로 이어받음 |
 
-**shadow가 정시보다 30초 먼저 세는 이유**: pg_cron이 정시에 Edge `wake-check`를 부르면 Edge가 MISSED를 기록해서, 그 뒤에 서버가 세면 후보가 0이 됨(이미 기록된 것은 `find_missed_wake_alarms`가 뺌). 그래서 정시 30초 전에 **정시를 기준 시각으로** 세어 Edge가 정시에 보게 될 후보와 같은 수를 얻음. 정시 60초 넘게 늦게 깨어나면 그 회차는 건너뜀(`회차 놓침` 로그).
+**shadow가 정시 30초 전부터 정시 전까지만 도는 이유**: pg_cron이 정시에 Edge `wake-check`를 부르면 Edge가 MISSED를 기록해서, 그 뒤에 서버가 세면 후보가 0이 됨(이미 기록된 것은 `find_missed_wake_alarms`가 뺌). 그래서 정시 30초 전에 **정시를 기준 시각으로** 세어 Edge가 정시에 보게 될 후보와 같은 수를 얻음. 틱이 막혔다 정시를 넘겨 깨어나면 그 회차는 건너뜀(`회차 놓침` 로그). 앞당김이 없는 작업은 정시 뒤 60초까지는 한 번 돎. 시계가 뒤로 가면(시간 맞춤) `시계가 뒤로 감` 로그와 함께 하트비트 · 정시를 지금 기준으로 다시 잡음.
 
-**Edge와 대조하는 법 (24시간 shadow, 완결점 1-10 ①)**: 서버 쪽은 `docker logs`의 `shadow job=wake-check` 줄(정시 `boundary=`와 `checked=`), Edge 쪽은 Supabase SQL 편집기의 `net._http_response`(보관이 짧아 몇 시간 안에 모음)에서 같은 정시의 `checked`:
-```sql
-select created, (content::jsonb->>'checked')::int as checked, (content::jsonb->>'recorded')::int as recorded
-from net._http_response where content::text like '{"checked"%' order by created desc limit 40;
-```
-같은 정시에서 수가 다르면 이유를 적음(Edge가 먼저 기록 · 그 사이 알람 상태가 바뀜 등).
+**Edge와 대조하는 법 (24시간 shadow, 완결점 1-10 ①)** — 증거 셋:
+1. **서버가 센 수 = 같은 정시에 Edge가 처리한 수**: 서버 쪽은 `docker logs`의 `shadow job=wake-check boundary=… checked=…` 줄, Edge 쪽은 Supabase SQL 편집기의 `net._http_response`. 응답 보관이 짧아(보통 6시간) 24시간 동안 6시간마다 한 번씩 결과를 파일로 저장해 모음(5분 정시라 하루 288건):
+   ```sql
+   select to_timestamp(floor(extract(epoch from created) / 300) * 300) at time zone 'UTC' as boundary,
+          (content::jsonb->>'checked')::int as checked, (content::jsonb->>'recorded')::int as recorded
+   from net._http_response where content::text like '{"checked"%' order by created desc limit 80;
+   ```
+   `boundary`(UTC, 서버 로그의 `boundary=…Z`와 같은 정시)로 맞춰 봄. 수가 다르면 이유를 적음(정시 직전 30초 안에 기상 확인이 들어옴 · Edge 시작이 늦음 등 ±1은 정상). 에러 응답은 `like`에 안 걸려 빠짐.
+2. **`alive_at` 간격 6분 이하**: `docker logs`의 `heartbeat ok at=…` 줄(5분마다) 사이 간격이 6분 이하이고 `heartbeat 쓰기 실패` 줄이 없음. `HEALTH_REQUIRE_SCHEDULER=true`면 15분 넘게 멈출 때 감시 메일도 옴.
+3. **기간 안 대상 1건 이상**: 위 `checked`가 0이 아닌 정시가 하나라도 있어야 함. 없으면 시험 계정에 알람 시각이 30분 넘게 지난 켜진 기상 알람을 만들어 두고(확인하지 않음) 그 정시를 봄.
 
-실패는 루프를 안 멈춤: DB 호출 실패 · 작업의 예외는 로그(오류 종류만)를 남기고 다음 회차로 감. 하트비트 쓰기 실패는 1분 뒤 다시 시도(`alive_at`이 멈추면 감시가 알림). `last_success_at`은 서버 시계로 씀(EC2는 NTP 동기화 — `run_job`의 12분 창에 비해 오차가 작음).
+대조하는 동안 `LOG_LEVEL`을 INFO로 둘 것(WARNING 이상이면 `shadow`와 `heartbeat ok` 줄이 안 남음). PostgREST `max-rows`(기본 1000)가 후보 수를 자를 수 있으나 Edge(supabase-js)도 같음.
+
+실패는 루프를 안 멈춤: DB 호출 실패 · 작업의 예외는 로그(오류 종류 · 상태 번호만)를 남기고 다음 회차로 감. 하트비트 쓰기 실패는 1분 뒤 다시 시도(`alive_at`이 멈추면 감시가 알림). `last_success_at`은 서버 시계로 씀(EC2는 NTP 동기화 — `run_job`의 12분 창에 비해 오차가 작음).
+
+**한계**: 키가 아예 없으면 스케줄러가 바로 종료(코드 1)해 배포 직후 점검에서 드러나지만, 키가 틀려(401) 쓰기가 계속 실패하거나 M1이 적용되지 않았을 땐 죽지 않고 1분마다 경고만 남김 — 이때는 `/health/deep`의 db 검사 · 감시가 잡음. 동기 단일 스레드라 한 작업이 오래 걸리면 같은 틱의 하트비트 · 다른 작업이 밀림(3차 핸들러에 시간 상한을 둘 것).
 
 ## 컨테이너 (`Dockerfile`)
 
