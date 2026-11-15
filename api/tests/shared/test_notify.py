@@ -1088,3 +1088,13 @@ def test_조용한_푸시_이미_보이는_알림을_받는_사람이_조용한_
     )
     assert len([b for b in wire if b["data"]["recipientUserId"] == R1]) == 1  # R1은 한 번만
     assert result == {"sent": 1, "failed": 1}  # 조용한 푸시(R2) 실패가 failed에 합쳐짐
+
+
+def test_rpc_응답_모양이_틀려도_받는_사람_id는_로그에_안_남김():
+    """plan_group_push 응답에는 받는 사람 id 목록이 있어 로그엔 모양(status · 키)만 (PR #10 재리뷰)"""
+    from app.shared.notify import _shape
+
+    text = _shape({"status": "WEIRD", "recipients": ["11111111-1111-1111-1111-111111111111"]})
+    assert "WEIRD" in text and "recipients" in text
+    assert "11111111" not in text
+    assert _shape(["x"]) == "list"

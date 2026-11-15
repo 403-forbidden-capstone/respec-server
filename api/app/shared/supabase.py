@@ -16,6 +16,7 @@ await 한 결과는 Result(data, error, count) — DB 오류여도 예외를 안
 토큰 · 키는 로그 · 오류에 안 넣음.
 """
 
+import asyncio
 import json
 import re
 from collections.abc import Generator
@@ -34,20 +35,31 @@ CLIENT_INFO = "supabase-js-node/2.117.2"
 SCHEMA = "public"
 OBJECT_ACCEPT = "application/vnd.pgrst.object+json"
 
-_state: dict[str, Any] = {"client": None}
+# client: 공용 httpx 클라이언트 · lazy: _http()가 직접 만든 것(그때의 이벤트 루프 `loop`에 묶임) · configure()로 넣은 것은 lazy=False
+_state: dict[str, Any] = {"client": None, "lazy": False, "loop": None}
 
 
 def configure(settings: Settings | None, client: httpx.AsyncClient | None = None) -> None:
     """앱 시작 때 (main lifespan) 설정과 공용 httpx 클라이언트를 넣음. 시험은 MockTransport를 넣은 클라이언트를 넣음. 둘 다 None이면 되돌림"""
     configure_env(settings)
     _state["client"] = client
+    _state["lazy"] = False
+    _state["loop"] = None
 
 
 def _http() -> httpx.AsyncClient:
+    """공용 클라이언트. configure()로 넣은 것이 정상 길 (서버: main lifespan, 스케줄러: async_runtime).
+    안 넣었으면 처음 쓸 때 만들되, 만든 루프가 아닌 곳(`asyncio.run()`을 여러 번 부르는 경우)에서 쓰이면 새로 만듦 —
+    옛 클라이언트의 연결은 닫힌 루프에 묶여 `Event loop is closed`로 죽기 때문"""
+    running = asyncio.get_running_loop()  # 루프 밖이면 RuntimeError (httpx 호출은 어차피 루프 안에서만)
     client: httpx.AsyncClient | None = _state["client"]
+    if client is not None and _state["lazy"] and _state["loop"] is not running:
+        client = None  # 만든 루프가 아님(닫혔거나 다른 루프) — 버리고 다시 만듦
     if client is None:
         client = httpx.AsyncClient(timeout=get_settings().http_timeout_seconds)
         _state["client"] = client
+        _state["lazy"] = True
+        _state["loop"] = running
     return client
 
 

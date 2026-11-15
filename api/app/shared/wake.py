@@ -105,7 +105,7 @@ async def _record_missed(service: Db, now: datetime, push: NotifyOptions) -> dic
     try:
         pushed = await _push_missed_to_self(service, [r for r in rows if r["event_key"] in fresh], push)
     except Exception as e:  # noqa: BLE001 — 푸시는 일이 끝난 뒤의 알림
-        log.error("[wake-check] 본인 미확인 푸시 실패 %s", str(e))
+        log.error("[wake-check] 본인 미확인 푸시 실패 %s", getattr(e, "code", None) or type(e).__name__)
     return {"checked": len(rows), "recorded": len(fresh), "pushed": pushed}
 
 
@@ -160,7 +160,7 @@ async def _push_nudges(service: Db, now: datetime, push: NotifyOptions) -> dict[
                 )
                 sent += result["sent"]
     except Exception as e:  # noqa: BLE001
-        log.error("[wake-check] 친구 미확인 푸시 실패 %s", str(e))
+        log.error("[wake-check] 친구 미확인 푸시 실패 %s", getattr(e, "code", None) or type(e).__name__)
     if sent < len(rows):
         # 토큰이 없거나 전송이 실패한 몫 — 기록이 먼저라 다시 보내지 않음
         log.error("[wake-check] 친구 알림 대상보다 적게 나감 claimed=%d sent=%d", len(rows), sent)

@@ -80,9 +80,15 @@
 | 작업 정시 | UTC 정시에 깨어남: `wake-check` · `alarm-roll` 5분마다(`:00 :05 …`, pg_cron `*/5`와 같은 시각), `suggestion-generate` 매일 09:00 UTC = 18:00 KST. 돌 때마다 `server_routes`(`kind = 'job'`)를 새로 읽음 |
 | `edge` | 아무것도 안 함 (pg_cron이 Edge를 부름). 표에 줄이 없어도 같음 |
 | `shadow` | 세기만 함(쓰기 · 푸시 없음). 지금 구현된 것은 `wake-check`뿐: `find_missed_wake_alarms(p_now := 다음 정시, 24시간)`의 행 수를 로그 한 줄로 — `shadow job=wake-check boundary=2026-11-15T03:05:00Z checked=2`. 알람 · 사용자 번호는 안 찍고 수만 |
-| `server` | 서버가 실제로 함(지금 시각 기준으로 처리) — 틀만 있고 구현된 작업은 아직 없음(3차). 구현이 없는 작업이 `server`로 정해지면 `shadow`로 **낮추고 오류 로그**(`서버 구현 없는 작업이 server로 설정됨 → shadow로 낮춤`), `last_success_at`은 안 씀 → pg_cron이 계속 Edge를 부름 |
+| `server` | 서버가 실제로 함(지금 시각 기준으로 처리). 세 작업 모두 구현(S7) — 아래 표. 성공하면 `last_success_at` 기록, **실패하면 안 씀**(로그에는 오류 코드 · 종류만) → pg_cron이 Edge를 이어받음. 본문은 async라 프로세스 시작 때 만든 이벤트 루프 하나 · httpx 클라이언트 하나(`app/async_runtime.py`)에서 돌리고 종료 때 닫음. 구현이 없는 작업이 `server`로 정해지면(지금은 없음) `shadow`로 **낮추고 오류 로그**, `last_success_at`은 안 씀 |
 | 표를 못 읽음 · 모르는 값 | `edge`로 봄 (서버는 아무것도 안 함) |
 | 되돌리기 | `update server_routes set mode = 'edge' where kind = 'job' and name = '…'` — 다음 회차부터 서버는 안 함. 서버가 멈춰도 pg_cron이 Edge로 이어받음 |
+
+| 작업 | edge | shadow | server |
+|---|---|---|---|
+| `wake-check` | 안 함 | `find_missed_wake_alarms` 행 수만 로그 | `run_wake_check` — MISSED 기록 · 푸시(`EXPO_ACCESS_TOKEN` 선택) · 영수증 확인 |
+| `alarm-roll` | 안 함 | 구현 없음(안 함) | `run_alarm_roll` 배치 길 — 카카오 길찾기는 `KAKAO_REST_API_KEY`가 있을 때만(없으면 Edge와 같게 길찾기 없이) |
+| `suggestion-generate` | 안 함 | 구현 없음(안 함) | `run_suggestion_generate` |
 
 **shadow가 정시 30초 전부터 정시 전까지만 도는 이유**: pg_cron이 정시에 Edge `wake-check`를 부르면 Edge가 MISSED를 기록해서, 그 뒤에 서버가 세면 후보가 0이 됨(이미 기록된 것은 `find_missed_wake_alarms`가 뺌). 그래서 정시 30초 전에 **정시를 기준 시각으로** 세어 Edge가 정시에 보게 될 후보와 같은 수를 얻음. 틱이 막혔다 정시를 넘겨 깨어나면 그 회차는 건너뜀(`회차 놓침` 로그). 앞당김이 없는 작업은 정시 뒤 60초까지는 한 번 돎. 시계가 뒤로 가면(시간 맞춤) `시계가 뒤로 감` 로그와 함께 하트비트 · 정시를 지금 기준으로 다시 잡음.
 

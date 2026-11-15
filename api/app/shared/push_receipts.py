@@ -12,6 +12,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from .db import safe_db_message
 from .js import from_ms, ms, parse_iso, to_iso
 from .push import FetchLike, fetch_expo_receipts
 from .supabase import Db
@@ -54,7 +55,7 @@ async def run_receipt_check(
             .limit(MAX_PER_RUN)
         )
         if due.error:
-            log.error("[wake-check] push_tickets 조회 실패 %s", due.error.get("message"))
+            log.error("[wake-check] push_tickets 조회 실패 %s", safe_db_message(due.error.get("message")))
             return nothing
         rows: list[dict[str, Any]] = due.data or []
         if not rows:
@@ -79,9 +80,8 @@ async def run_receipt_check(
                 if not prev or ms(parse_iso(r["created_at"])) > ms(parse_iso(prev)):
                     gone[r["token"]] = r["created_at"]
             else:
-                log.error(
-                    "[wake-check] 푸시 영수증 오류 %s %s", error or "unknown", receipt.get("message") or ""
-                )
+                # Edge는 receipt.message도 찍었지만, Expo 문구에 푸시 토큰이 들어갈 수 있어 서버 로그엔 오류 코드만 (로그 규칙)
+                log.error("[wake-check] 푸시 영수증 오류 %s", error or "unknown")
         expired = [
             r
             for r in rows
@@ -98,17 +98,19 @@ async def run_receipt_check(
             )
             for dele in dels:
                 if dele.error:
-                    log.error("[wake-check] 만료 토큰 삭제 실패 %s", dele.error.get("message"))
+                    log.error(
+                        "[wake-check] 만료 토큰 삭제 실패 %s", safe_db_message(dele.error.get("message"))
+                    )
         finished = [r["ticket_id"] for r in [*resolved, *expired]]
         for part in _chunks(finished, DELETE_CHUNK):
             dele = await service.from_("push_tickets").delete().in_("ticket_id", part)
             if dele.error:
-                log.error("[wake-check] 영수증 표 정리 실패 %s", dele.error.get("message"))
+                log.error("[wake-check] 영수증 표 정리 실패 %s", safe_db_message(dele.error.get("message")))
         return {
             "checked": len(rows) if ok else len(resolved),
             "tokensRemoved": len(gone),
             "expired": len(expired),
         }
     except Exception as e:  # noqa: BLE001 — 영수증 확인은 같은 배치의 MISSED 기록을 막지 않음
-        log.error("[wake-check] 영수증 확인 실패 %s", str(e))
+        log.error("[wake-check] 영수증 확인 실패 %s", getattr(e, "code", None) or type(e).__name__)
         return nothing

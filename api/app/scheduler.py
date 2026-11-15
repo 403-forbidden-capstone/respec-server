@@ -7,6 +7,7 @@
        edge    아무것도 안 함 (pg_cron이 Edge를 부름)
        shadow  세기만 함 (쓰기 · 푸시 없음), 결과를 로그 한 줄로 — Edge와 대조하려고. 정시 기준으로 세므로 정시 전에만 돎
        server  실제로 함. 지금 시각 기준으로 처리하고, 성공하면 server_heartbeat.last_success_at 기록 (pg_cron이 이것을 보고 Edge 호출을 건너뜀)
+              wake-check · alarm-roll · suggestion-generate 모두 구현됨(jobs.py). 본문은 async라 async_runtime의 루프 하나에서 돌림. 실패하면 기록 안 함
      서버 구현이 아직 없는 작업이 server로 정해지면 shadow로 낮추고 오류 로그를 남김 — 성공 기록은 안 함 → pg_cron이 계속 Edge를 부름
      (기상 확인이 조용히 멈추는 길을 막음). 표를 못 읽거나 모르는 값이면 edge로 봄 (= 서버는 아무것도 안 함)
 되돌리기: server_routes의 mode를 edge로 한 줄 바꾸면 다음 회차부터 서버는 안 함. 서버가 멈춰도 pg_cron이 Edge로 이어받음.
@@ -22,7 +23,9 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from types import FrameType
 
+from .async_runtime import runtime
 from .core.config import Settings
+from .core.errors import AppError
 from .db import Db, DbError
 from .jobs import JOBS, Job
 
@@ -153,6 +156,9 @@ class Scheduler:
         except DbError as exc:
             log.warning("%s 실패 job=%s boundary=%s: %s", mode, job.name, _stamp(boundary), exc)
             return
+        except AppError as exc:  # server 본문(shared Db 포함)의 오류 — 코드(종류)만. 메시지에는 DB가 돌려준 글이 섞일 수 있어 안 찍음
+            log.warning("%s 실패 job=%s boundary=%s code=%s", mode, job.name, _stamp(boundary), exc.code)
+            return
         except Exception as exc:  # noqa: BLE001 — 작업의 버그가 스케줄러(하트비트 포함)를 죽이면 안 됨. 내용은 안 찍고 종류만
             log.error("%s 예외 job=%s boundary=%s: %s", mode, job.name, _stamp(boundary), type(exc).__name__)
             return
@@ -188,6 +194,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
 
     db = Db(settings)
+    runtime.start(settings)  # server 모드 작업이 쓰는 이벤트 루프 · httpx 클라이언트 (프로세스 수명)
     scheduler = Scheduler(db)
     log.info("scheduler 시작 version=%s jobs=%s", settings.app_version, ",".join(job.name for job in JOBS))
     try:
@@ -199,7 +206,12 @@ def main() -> int:
                 log.error("scheduler tick 예외: %s", type(exc).__name__)
             stop.wait(1.0)
     finally:
-        db.close()
+        try:
+            runtime.close()  # httpx 클라이언트 닫기가 실패해도 아래 DB 닫기 · 종료 로그는 남김
+        except Exception as exc:  # noqa: BLE001
+            log.error("scheduler 종료 중 runtime.close 실패: %s", type(exc).__name__)
+        finally:
+            db.close()
     log.info("scheduler 종료 신호 받음")
     log.info("scheduler 종료")
     return 0

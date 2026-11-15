@@ -5,7 +5,7 @@ import logging
 import signal
 import threading
 import types
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
@@ -72,7 +72,11 @@ class FakeRest:
         ]
 
 
-def make_scheduler(rest: FakeRest, jobs: tuple[Job, ...] = JOBS, clock=None) -> Scheduler:
+# server 손잡이가 없는 작업 목록 — "구현 없는 작업이 server로 정해지면 낮춤" 경로를 시험하려고 (실제 JOBS는 S7부터 세 작업 모두 server 구현이 있음)
+JOBS_WITHOUT_SERVER: tuple[Job, ...] = tuple(replace(j, server=None) for j in JOBS)
+
+
+def make_scheduler(rest: FakeRest, jobs: tuple[Job, ...] = JOBS_WITHOUT_SERVER, clock=None) -> Scheduler:
     db = Db(make_settings(), transport=httpx.MockTransport(rest.handler))
     return Scheduler(db, jobs, clock=clock or (lambda: BOUNDARY))
 
