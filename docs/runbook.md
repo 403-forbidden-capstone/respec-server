@@ -27,7 +27,7 @@
 
 앱은 함수 줄을, 서버 스케줄러와 pg_cron은 작업 줄을 읽음. 값만 바꾸는 운영 조작이고 마이그레이션이 아님. 열쇠는 `(kind, name)` — `alarm-roll`은 함수 줄과 작업 줄이 둘 다 있어서 `kind`를 꼭 같이 씀.
 
-반영 시점: 표는 SQL을 실행한 순간 바뀜. 앱은 표를 최대 5분 캐시(못 읽었으면 30초 뒤 다시)하므로 앱에서 보이는 데는 **최대 5분**. 서버가 연속 3번 못 쓸 상태면 앱의 차단기가 5분 동안 서버를 건너뛰고 바로 Edge로 감. 작업 줄은 다음 회차(5분 작업은 5분 안)부터.
+반영 시점: 표는 SQL을 실행한 순간 바뀜. 앱은 표를 최대 5분 캐시(못 읽었으면 30초 뒤 다시)하므로 앱에서 보이는 데는 **최대 5분**. 읽기 함수(`place-search` 등)는 서버가 연속 3번 못 쓸 상태면 앱의 차단기가 5분 동안 서버를 건너뛰고 바로 Edge로 감(쓰기 함수는 건너뛰지 않음). 작업 줄은 다음 회차(5분 작업은 5분 안)부터.
 
 **1-1. 지금 값 캡처** (바꾸기 전에 먼저, 화면 캡처 또는 복사)
 
@@ -163,7 +163,7 @@ SQL 편집기: `select job_name, alive_at, last_success_at from public.server_he
 
 강제 종료 시험(감시 · 이어받기 확인용, 트래픽이 거의 없을 때):
 
-1. `sudo docker stop respec-scheduler-1` (되돌림: `sudo docker start respec-scheduler-1`, 또는 `deploy`로 다시 올리면 `restart: unless-stopped`로 다시 뜸)
+1. `sudo docker stop respec-scheduler-1` (되돌림: `sudo docker start respec-scheduler-1`. 직접 멈춘 컨테이너는 `restart: unless-stopped` 때문에 재부팅해도 자동으로 안 뜨므로 시험 뒤에 꼭 `start`)
 2. `alive_at`이 멈춤 → 15분 뒤 `/health/deep`의 `scheduler`가 `fail`(`HEALTH_REQUIRE_SCHEDULER=true`일 때) → UptimeRobot 감시 메일.
 3. 작업 줄이 `server`였다면 pg_cron이 20분 안에 Edge로 이어받음(5절).
 4. 시작해서 `alive_at`이 다시 갱신 → `/health/deep` 200 → 복구 메일.
@@ -176,7 +176,7 @@ SQL 편집기: `select job_name, alive_at, last_success_at from public.server_he
 |---|---|---|
 | wake-check · alarm-roll (5분마다) | pg_cron이 Edge를 부름(M1 이전과 같음) | 서버의 마지막 성공(`last_success_at`)이 **12분 안**이면 pg_cron이 건너뜀. 없으면 Edge를 부름 → 서버가 멈춘 뒤 이어받기까지 최악 약 17분, 문서에는 **20분 안** |
 | suggestion-generate (매일 18:00 KST) | 18:00에 pg_cron이 Edge를 부름. 18:15 안전망은 아무것도 안 함 | 18:00 pg_cron은 건너뜀(서버가 같은 시각에 함). **18:15 안전망**이 "오늘(한국 날짜) 서버 성공 기록 없음"이면 Edge를 부름 |
-| 앱의 함수 호출(`place-search` 등) | `edge`면 Edge | `server`면 서버. 못 읽으면(표 읽기 실패) 전부 Edge. 서버가 연속 3번 못 쓸 상태면 5분간 Edge |
+| 앱의 함수 호출(`place-search` 등) | `edge`면 Edge | `server`면 서버. 못 읽으면(표 읽기 실패) 전부 Edge. 읽기 함수는 서버가 연속 3번 못 쓸 상태면 5분간 Edge |
 
 - 앱이 표를 읽는 간격은 5분(실패 30초). 그래서 1절의 값을 바꿔도 앱은 최대 5분 뒤에 따라옴.
 - 서버 구현이 없는 작업이 `server`로 설정되면 스케줄러가 `shadow`로 낮추고 오류 로그를 남김(성공 기록 안 씀) → pg_cron이 계속 Edge를 부름. **지금(S3 머지 기준)은 wake-check의 `shadow`만 구현**이고 `server` 손잡이는 푸시 모듈 뒤에 채움 — 그 전까지는 `server`로 두어도 위 오른쪽 칸의 "서버가 함"은 일어나지 않고 Edge가 계속 함.
