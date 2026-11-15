@@ -16,11 +16,11 @@ from fastapi import APIRouter, Request
 from ..core.auth import CurrentUser
 from ..core.errors import AppError
 from ..core.read import Reader, read_json
+from ..shared.auth import bearer_of
 from ..shared.commit import CommitCtx, assert_persistable, commit_standalone, persist_appointment
 from ..shared.db import must
 from ..shared.plan import PlanContext, build_plan, load_profile
 from ..shared.requests import read_commit_request
-from ..shared.auth import bearer_of
 from ..shared.supabase import create_service_client, create_user_client
 from ..shared.tz import safe_time_zone
 from .alarm_suggest import kakao_key_of

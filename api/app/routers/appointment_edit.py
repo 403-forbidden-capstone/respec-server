@@ -18,10 +18,10 @@ from fastapi import APIRouter, Request
 from ..core.auth import CurrentUser
 from ..core.read import Reader, read_json
 from ..kakao import kakao_travel_minutes
+from ..shared.auth import bearer_of
 from ..shared.edit_request import read_edit_request
 from ..shared.edit_run import EditCtx, run_edit
 from ..shared.notify import NotifyOptions
-from ..shared.auth import bearer_of
 from ..shared.supabase import create_service_client, create_user_client
 
 router = APIRouter()

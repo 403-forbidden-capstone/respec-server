@@ -17,10 +17,10 @@ from fastapi import APIRouter, Request
 from ..core.auth import CurrentUser
 from ..core.errors import AppError
 from ..core.read import Reader, read_json
+from ..shared.auth import bearer_of
 from ..shared.plan import BuiltPlan, PlanContext, TravelRequiredError, build_plan
 from ..shared.plan_core import to_suggestion, to_travel_required_suggestion
 from ..shared.requests import read_suggest_request
-from ..shared.auth import bearer_of
 from ..shared.supabase import create_user_client
 
 router = APIRouter()
