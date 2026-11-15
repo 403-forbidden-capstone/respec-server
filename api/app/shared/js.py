@@ -6,6 +6,7 @@ Date.UTC(월 · 일 넘침 허용, 연도 0~99는 1900년대) · Date.parse(오�
 시각은 전부 UTC aware `datetime` 또는 epoch 밀리초 int. naive datetime은 오류로 막음.
 """
 
+import json
 import math
 import re
 from datetime import UTC, datetime, timedelta
@@ -101,6 +102,22 @@ def js_number(value: Any) -> int | float:
 # ---------------------------------------------------------------------------
 # 시각 (Date)
 # ---------------------------------------------------------------------------
+
+
+def json_safe(value: Any) -> Any:
+    """JSON.stringify와 같게 유한하지 않은 숫자(NaN · ±Infinity)를 null로 — Python json.dumps는 `Infinity` 글자를 내보내 PostgREST가 거절함"""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [json_safe(v) for v in value]
+    return value
+
+
+def js_json(value: Any) -> str:
+    """JSON.stringify(value) — 공백 없음 · 한글 그대로 · NaN/Infinity는 null"""
+    return json.dumps(json_safe(value), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 def ms(dt: datetime) -> int:

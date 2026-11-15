@@ -20,6 +20,7 @@ from ..core.read import Reader, read_json
 from ..shared.plan import BuiltPlan, PlanContext, TravelRequiredError, build_plan
 from ..shared.plan_core import to_suggestion, to_travel_required_suggestion
 from ..shared.requests import read_suggest_request
+from ..shared.auth import bearer_of
 from ..shared.supabase import create_user_client
 
 router = APIRouter()
@@ -44,7 +45,7 @@ async def alarm_suggest(request: Request, user: CurrentUser) -> dict[str, Any]:
 
     ctx = PlanContext(
         user_id=user.user_id,
-        db=create_user_client(request.headers.get("authorization", "")),
+        db=create_user_client(bearer_of(request)),
         now=_now(),
         kakao_key=kakao_key_of(request),
         http=request.app.state.http,

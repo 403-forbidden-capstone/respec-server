@@ -296,6 +296,16 @@ def test_insert_body_keeps_korean_and_null(env, db):
     assert env.last.content == '{"title":"우산","memo":null}'.encode()
 
 
+def test_insert_body_non_finite_number_is_null_like_json_stringify(env, db):
+    """요청에서 1e400(= Infinity)이 고친 값 기록까지 오면 supabase-js는 JSON.stringify로 null을 보냄 — `Infinity` 글자를 보내면 PostgREST가 거절(PR #9 리뷰)"""
+    run(
+        db.from_("user_edit_logs").insert(
+            {"edited_value": float("inf"), "auto_value": [float("-inf"), float("nan")]}
+        )
+    )
+    assert env.last.content == b'{"edited_value":null,"auto_value":[null,null]}'
+
+
 def test_update_patch_with_filters(env, db):
     run(
         db.from_("appointments")

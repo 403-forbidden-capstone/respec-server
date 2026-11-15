@@ -20,6 +20,7 @@ from ..shared.commit import CommitCtx, assert_persistable, commit_standalone, pe
 from ..shared.db import must
 from ..shared.plan import PlanContext, build_plan, load_profile
 from ..shared.requests import read_commit_request
+from ..shared.auth import bearer_of
 from ..shared.supabase import create_service_client, create_user_client
 from ..shared.tz import safe_time_zone
 from .alarm_suggest import kakao_key_of
@@ -48,7 +49,7 @@ async def alarm_commit(request: Request, user: CurrentUser) -> dict[str, Any]:
     parsed = read_commit_request(root)
     root.finish()
 
-    user_db = create_user_client(request.headers.get("authorization", ""))
+    user_db = create_user_client(bearer_of(request))
     ctx = CommitCtx(user_id=user.user_id, user_db=user_db, service=create_service_client(), now=_now())
 
     if _field(parsed, "type") == "STANDALONE":

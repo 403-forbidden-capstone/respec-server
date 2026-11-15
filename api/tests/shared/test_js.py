@@ -9,6 +9,7 @@ from app.shared.js import (
     from_ms,
     js_ceil,
     js_floor,
+    js_json,
     js_mod,
     js_number,
     js_round,
@@ -185,3 +186,11 @@ def test_pad_start():
     assert pad_start(5, 2) == "05" and pad_start(2026, 4) == "2026" and pad_start(12345, 4) == "12345"
     assert pad_start(7, 4) == "0007"
     assert pad_start(-5, 4) == "00-5"  # JS String(-5).padStart(4, '0')
+
+
+def test_js_json_유한하지_않은_숫자는_null():
+    """JSON.stringify: NaN · ±Infinity → null (객체 · 배열 안도), 한글 그대로, 공백 없음 (PR #9 리뷰 고칠 것 1)"""
+    assert (
+        js_json({"a": math.inf, "b": [1.5, -math.inf, math.nan], "c": "한글", "d": None})
+        == '{"a":null,"b":[1.5,null,null],"c":"한글","d":null}'
+    )

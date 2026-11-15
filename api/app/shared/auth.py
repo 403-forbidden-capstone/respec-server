@@ -13,7 +13,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
-from ..core.auth import extract_bearer, require_user
+from ..core.auth import MSG_EXPIRED, extract_bearer, require_user
 from ..core.errors import AppError
 from .env import service_keys
 from .keys import matches_any_key
@@ -36,6 +36,15 @@ async def require_user_db(request: Request) -> AuthedUserDb:
 
 
 CurrentUserDb = Annotated[AuthedUserDb, Depends(require_user_db)]
+
+
+def bearer_of(request: Request) -> str:
+    """TS `Bearer ${token}` — 받은 헤더를 그대로 넘기지 않고 토큰만 꺼내 다시 만듦(소문자 bearer · 공백 섞임도 같은 모양으로).
+    require_user(CurrentUser)가 통과한 뒤에만 부름"""
+    token = extract_bearer(request.headers.get("authorization"))
+    if token is None:
+        raise AppError("AUTH_REQUIRED", MSG_EXPIRED)
+    return f"Bearer {token}"
 
 
 def is_service_call(request: Request) -> bool:

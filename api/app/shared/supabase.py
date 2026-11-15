@@ -27,6 +27,7 @@ import httpx
 from ..core.config import Settings
 from ..core.supabase import rest_headers, rest_url
 from .env import anon_key, configure_env, get_settings, service_key, supabase_url
+from .js import js_json
 
 # supabase-js가 실는 X-Client-Info (버전은 본 레포 supabase.ts가 고정한 것)
 CLIENT_INFO = "supabase-js-node/2.117.2"
@@ -67,7 +68,7 @@ def _js_str(value: Any) -> str:
     if isinstance(value, float) and value.is_integer() and abs(value) < 1e21:
         return str(int(value))
     if isinstance(value, dict | list):
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        return js_json(value)
     return str(value)
 
 
@@ -227,7 +228,7 @@ class Query:
 
     async def _execute(self) -> Result:
         content = (
-            json.dumps(self._body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            js_json(self._body).encode("utf-8")  # supabase-js는 JSON.stringify — NaN · Infinity는 null
             if self._body is not None and self._method not in ("GET", "HEAD")
             else None
         )

@@ -74,6 +74,7 @@ def api(make_client, signer, monkeypatch):
             return client.post(path, json=body, headers=headers)
 
     api = Api()
+    api.client = client
     api.db = db
     api.clock = clock
     api.authorizations = authorizations
@@ -127,6 +128,14 @@ def test_a_wrong_field_is_a_validation_failure_with_issues_of_path_and_message(a
 
 
 # ---------- alarm-suggest ----------
+
+
+def test_user_client_gets_rebuilt_bearer_not_the_raw_header(api, signer):
+    """TS는 `Bearer ${token}`으로 다시 만들어 넘김 — 소문자 bearer · 앞뒤 공백이 와도 PostgREST에는 같은 모양 (PR #9 리뷰 고칠 것 2)"""
+    token = signer.token()
+    res = api.client.post(SUGGEST, json=FULL, headers={"authorization": f"  bearer   {token}  "})
+    assert res.status_code == 200, res.text
+    assert api.authorizations == [f"Bearer {token}"]
 
 
 def test_suggest_returns_the_preview_without_writing(api):

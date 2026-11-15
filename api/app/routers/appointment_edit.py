@@ -21,6 +21,7 @@ from ..kakao import kakao_travel_minutes
 from ..shared.edit_request import read_edit_request
 from ..shared.edit_run import EditCtx, run_edit
 from ..shared.notify import NotifyOptions
+from ..shared.auth import bearer_of
 from ..shared.supabase import create_service_client, create_user_client
 
 router = APIRouter()
@@ -68,7 +69,7 @@ async def appointment_edit(request: Request, user: CurrentUser) -> dict[str, Any
 
     ctx = EditCtx(
         user_id=user.user_id,
-        user_db=create_user_client(request.headers["authorization"]),
+        user_db=create_user_client(bearer_of(request)),
         service=create_service_client(),
         now=_now(),
         kakao=_kakao_lookup(request),
