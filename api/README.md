@@ -9,6 +9,8 @@
 | `GET` · `HEAD /health` | 프로세스가 떠 있는가만. 본문 `{"status":"ok","version":"<배포 태그>"}` (`version` = env `APP_VERSION`, 없으면 `dev`) | 없음 |
 | `GET` · `HEAD /health/deep` | 공개 키(JWKS) · DB(PostgREST) · 스케줄러 최근 실행. 하나라도 실패면 503. 결과를 5초(`HEALTH_DEEP_CACHE_SECONDS`) 재사용(실패 포함) | 없음 |
 | `GET /me` | 토큰 주인의 `{"id": ...}` | 필요 |
+| `POST /fn/place-search` | 장소 검색(카카오 로컬). Edge `place-search`와 같은 요청 · 응답 — 아래 "장소 함수" | 필요 |
+| `POST /fn/place-reverse` | 좌표 → 주소(카카오 로컬). Edge `place-reverse`와 같은 요청 · 응답 | 필요 |
 | `OPTIONS *` | CORS 사전 확인. 토큰 없이 204 | 없음 |
 
 `/docs` · `/redoc` · `/openapi.json`은 꺼 둠(404). 끝에 `/`를 붙인 주소(`/me/`)도 리다이렉트 없이 404.
@@ -58,6 +60,7 @@
 | `SUPABASE_JWT_ISSUER` | 아니오 | 토큰의 `iss`가 `SUPABASE_URL/auth/v1`과 다를 때만 |
 | `SUPABASE_JWKS_URL` | 아니오 | 공개 키 목록 주소가 기본(`SUPABASE_URL/auth/v1/.well-known/jwks.json`)과 다를 때만 (로컬 compose: 컨테이너가 호스트의 Supabase를 부르는 주소) |
 | `SUPABASE_SECRET_KEY` | scheduler는 예, api는 `/health/deep`에 | 서버 전용 Supabase 키(`sb_secret_…`). PostgREST로 `server_routes` · `server_heartbeat`를 읽고 `server_heartbeat`에 씀(scheduler), `/health/deep`이 `server_heartbeat`를 읽음(api). 없으면 **scheduler는 시작하지 않고 종료 코드 1**, api는 deep의 db 검사가 실패 |
+| `KAKAO_REST_API_KEY` | `/fn/place-*`에 | 카카오 REST API 키(카카오 로컬 사용 설정이 켜진 것). **없으면 `/fn/place-*`가 `NOT_CONFIGURED`(503)** — 앱은 읽기 함수의 이 오류를 Edge로 한 번 더 보내므로 키를 넣기 전에 표를 켜도 안전함. 값은 로그 · 응답에 안 나옴 |
 | `JWT_AUDIENCE` | 아니오 | 기본 `authenticated` |
 | `JWT_LEEWAY_SECONDS` | 아니오 | 시계 어긋남 허용, 기본 10 |
 | `JWKS_CACHE_TTL_SECONDS` · `JWKS_MIN_REFETCH_SECONDS` · `HTTP_TIMEOUT_SECONDS` | 아니오 | 기본 600 · 10 · 3 |
@@ -99,6 +102,34 @@
 실패는 루프를 안 멈춤: DB 호출 실패 · 작업의 예외는 로그(오류 종류 · 상태 번호만)를 남기고 다음 회차로 감. 하트비트 쓰기 실패는 1분 뒤 다시 시도(`alive_at`이 멈추면 감시가 알림). `last_success_at`은 서버 시계로 씀(EC2는 NTP 동기화 — `run_job`의 12분 창에 비해 오차가 작음).
 
 **한계**: 키가 아예 없으면 스케줄러가 바로 종료(코드 1)해 배포 직후 점검에서 드러나지만, 키가 틀려(401) 쓰기가 계속 실패하거나 M1이 적용되지 않았을 땐 죽지 않고 1분마다 경고만 남김 — 이때는 `/health/deep`의 db 검사 · 감시가 잡음. 동기 단일 스레드라 한 작업이 오래 걸리면 같은 틱의 하트비트 · 다른 작업이 밀림(3차 핸들러에 시간 상한을 둘 것).
+
+## 장소 함수 (`routers/places.py` · `kakao.py` · `kakao_parse.py` · `core/read.py`, S4 · 완결점 1-12)
+
+Edge `place-search` · `place-reverse`의 서버판 — 앱이 `callEdge()`로 표(`server_routes`)에 따라 주소만 바꿔 부름(본 레포 M2, 서버 설계 S3). 웹 비유: 같은 API를 Express에서 FastAPI로 옮기되 URL의 앞부분만 다르고(`/functions/v1/<이름>` → `/fn/<이름>`) 요청 · 응답 · 오류 JSON은 한 글자도 안 바뀜.
+
+| | `POST /fn/place-search` | `POST /fn/place-reverse` |
+|---|---|---|
+| 요청 | `{ query(1~100자), lat?, lng?, limit?(1~15, 기본 10) }` — lat · lng는 같이 | `{ lat, lng }` 둘 다 필수 |
+| 응답 | `{ places: [{ id, name, address, lat, lng, category? }] }`, 결과가 없으면 빈 배열 | `{ place: { address, roadAddress, buildingName } \| null }` — 주소 없는 곳(바다 · 국외)은 `null` |
+
+순서는 Edge와 같음: **토큰 확인(401) → 입력 검사(400, `details.issues[{path, message}]`) → 키 확인(503 `NOT_CONFIGURED`) → 카카오 호출 → 오류 번역**.
+
+| 카카오 쪽 | 서버가 돌려주는 것 |
+|---|---|
+| 401 · 403 (키가 틀림 · 카카오 로컬 사용 설정이 꺼짐) | 503 `NOT_CONFIGURED` |
+| 429 | 429 `RATE_LIMITED` |
+| 시간 초과(4초) · 5xx · 연결 실패 · 깨진 응답 · 그 밖의 상태 | 502 `PLACE_UNAVAILABLE` |
+
+- 검색: 정확도순으로 부르고 기준 좌표(x = 경도, y = 위도)는 치우침으로만 씀. 같은 이름의 여러 지점(스타벅스)은 기준 좌표에서 가까운 순. 검색어가 "…역"으로 끝나면 지하철역(SW8)을 따로 찾아 맨 위에 두고(겹치는 곳은 한 번), 이 보조 호출이 실패해도 본 검색은 계속함
+- **JS와 맞춘 곳** (같은 입력이 같은 결과가 되도록 `core/read.py` · `kakao_parse.py`): 글자 수는 UTF-16 단위(이모지 하나 = 2) · trim은 JS가 지우는 글자 · `true`는 숫자가 아님 · `NaN` · `Infinity`는 JSON이 아님 · `5.0`은 정수 · `1e400`은 숫자가 아님 · 카카오 좌표 글자 `""`는 0 · `37.0`은 `37`로 내보냄
+- 키 · 좌표 · 검색어는 로그 · 오류 본문에 안 남김(위 "로그에 안 남기는 것"). 응답은 저장하지 않음(카카오 약관)
+- **계약 시험**: `tests/test_kakao_parse.py`는 Edge `_shared/kakao-parse.test.ts`의 샘플 · 기대값을 그대로 옮긴 것이라 서버판이 같은 값을 내면 같은 응답이 나감. `tests/test_read.py` · `tests/test_places.py`는 입력 검사 문구 · 순서 · 오류 번역표를 HTTP 수준에서 대조함. **Edge의 기대값이 바뀌면 이 시험도 같이 바꿀 것**
+- **재생 스크립트** `dev/replay_places.py`: 같은 입력 20건(검색 · 주소 · 잘못된 입력)을 Edge · 서버에 번갈아 보내 응답(상태 + JSON)이 같은지, 같은 입력으로 잰 p95가 서버 ≤ Edge인지 확인하고 요청이 30건 이상인지 셈(`--rounds 2` = 양쪽 40건). 환경 변수 `REPLAY_SUPABASE_URL` · `REPLAY_ANON_KEY` · `REPLAY_EMAIL` · `REPLAY_PASSWORD`(점검용 시험 계정) · `REPLAY_SERVER_URL`로만 받고 화면 · 파일에 안 찍음:
+  ```bash
+  python dev/replay_places.py --rounds 2 --warmup
+  ```
+- **서버 로그 확인 (끝 칸 1-12 ④)**: 재생 뒤 서버 로그에 토큰 · 좌표 · 검색어가 0건이어야 함 — `docker compose logs api | grep -E "Bearer|eyJ|KakaoAK|세종대|강남역|37\.5509|127\.0736"` 결과가 비어 있어야 함
+- 켜는 순서: ① 서버 env에 `KAKAO_REST_API_KEY` 반영 ② 재생 스크립트 통과 ③ 표에서 `place-search` · `place-reverse`를 `canary`(시험 계정만, `server_route_users`)로 — 본 레포 `supabase/README.md` "서버 전환 스위치" ④ 24시간 동안 요청 30건 이상 · 서버 5xx 0 · Edge 자동 대체 0 확인 ⑤ 안 되면 `edge`로 한 줄(`update server_routes set mode = 'edge' where kind = 'function' and name = '…'`). 끝나도 값은 `canary`로 둠(전체 전환은 2-6과 같이)
 
 ## 컨테이너 (`Dockerfile`)
 

@@ -17,7 +17,7 @@ from .core.config import Settings
 from .core.errors import AppError, code_for_status, error_body
 from .core.http import EdgeCompatMiddleware, EdgeJSONResponse, error_response
 from .core.jwks import JwksCache
-from .routers import health, me
+from .routers import health, me, places
 
 
 def create_app(
@@ -82,5 +82,6 @@ def create_app(
 
     app.include_router(health.router)
     app.include_router(me.router)
+    app.include_router(places.router)
     app.add_middleware(EdgeCompatMiddleware)  # 맨 바깥 (마지막에 더한 것이 가장 바깥)
     return app

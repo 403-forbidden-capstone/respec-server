@@ -5,6 +5,7 @@ fake_supabase.jwks_down = True 로 공개 키 목록 요청을 실패시키고, 
 
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import httpx
@@ -70,8 +71,14 @@ class FakeSupabase:
     rest_down: bool = False
     jwks_calls: int = 0
     rest_requests: list[httpx.Request] = field(default_factory=list)
+    # 카카오(dapi.kakao.com) 흉내 — 요청을 받아 응답을 돌려주는 함수. 없으면 카카오로 나가는 요청은 시험이 실패하게 404
+    kakao: Callable[[httpx.Request], httpx.Response] | None = None
+    kakao_requests: list[httpx.Request] = field(default_factory=list)
 
     def handler(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host == "dapi.kakao.com":
+            self.kakao_requests.append(request)
+            return self.kakao(request) if self.kakao else httpx.Response(404)
         if request.url.path.endswith("/.well-known/jwks.json"):
             self.jwks_calls += 1
             if self.jwks_down:
