@@ -28,7 +28,7 @@ import httpx
 from ..core.config import Settings
 from ..core.supabase import rest_headers, rest_url
 from .env import anon_key, configure_env, get_settings, service_key, supabase_url
-from .js import js_json
+from .js import js_json, js_number_to_string
 
 # supabase-js가 실는 X-Client-Info (버전은 본 레포 supabase.ts가 고정한 것)
 CLIENT_INFO = "supabase-js-node/2.117.2"
@@ -77,8 +77,8 @@ def _js_str(value: Any) -> str:
         return "true" if value else "false"
     if value is None:
         return "null"
-    if isinstance(value, float) and value.is_integer() and abs(value) < 1e21:
-        return str(int(value))
+    if isinstance(value, int | float):
+        return js_number_to_string(value)
     if isinstance(value, dict | list):
         return js_json(value)
     return str(value)

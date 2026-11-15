@@ -7,10 +7,10 @@ JS와 같게 맞춘 곳: 숫자 문자열 읽기(빈 글자 = 0, 앞뒤 공백 �
 
 import math
 import re
-from decimal import Decimal
 from typing import Any
 
 from .core.read import JS_WHITESPACE, js_trim
+from .shared.js import js_number, js_number_to_string
 
 Place = dict[str, Any]  # {id, name, address, lat, lng, category?} — 키 순서까지 Edge와 같음
 
@@ -21,7 +21,7 @@ def _is_object(value: Any) -> bool:
 
 def out_number(value: int | float) -> int | float:
     """JS는 37.0과 37을 구분하지 않아 `37`로 찍음 — 정수로 떨어지는 값은 정수로"""
-    if isinstance(value, float) and value.is_integer() and abs(value) < 1e21:
+    if isinstance(value, float) and value.is_integer() and abs(value) < 2**53:
         return int(value)
     return value
 
@@ -29,16 +29,7 @@ def out_number(value: int | float) -> int | float:
 def to_number(value: Any) -> int | float | None:
     """Edge `num`: 글자는 Number(글자), 숫자는 그대로. 유한한 숫자만 — 아니면 None"""
     if isinstance(value, str):
-        text = js_trim(value)
-        if not text:
-            number: int | float = 0  # JS Number('') === 0
-        else:
-            if "_" in text or not text.isascii():  # 파이썬은 받아주지만 JS는 NaN
-                return None
-            try:
-                number = float(text)
-            except ValueError:
-                return None
+        number: int | float = js_number(value)  # Number(글자) — 빈 글자 0 · 16진수 · NaN
     elif isinstance(value, bool) or not isinstance(value, int | float):
         return None
     else:
@@ -56,31 +47,11 @@ def text_of(value: Any) -> str:
 
 
 def js_number_str(value: int | float) -> str:
-    """JS `String(n)`(Number::toString) — 카카오에 보내는 좌표 글자. 127 → '127', 37.5 → '37.5', 0.00005 → '0.00005', 1e-7 → '1e-7'.
-    가장 짧게 왕복되는 자릿수(파이썬 repr과 같음)를 JS 규칙으로 놓음: 지수 표기는 1e-6 미만 · 1e21 이상에서만 (파이썬은 1e-4 미만부터)"""
-    if isinstance(value, int):
-        return str(value)
-    if value == 0:
-        return "0"
-    sign = "-" if value < 0 else ""
-    parts = Decimal(repr(abs(value))).as_tuple()
-    digits = "".join(map(str, parts.digits))
-    exponent = int(parts.exponent)
-    stripped = digits.rstrip("0")
-    exponent += len(digits) - len(stripped)
-    k, n = len(stripped), len(stripped) + exponent  # 자릿수 k, 소수점 위치 n (값 = 0.자릿수 × 10^n)
-    if k <= n <= 21:
-        return sign + stripped + "0" * (n - k)
-    if 0 < n <= 21:
-        return sign + stripped[:n] + "." + stripped[n:]
-    if -6 < n <= 0:
-        return sign + "0." + "0" * -n + stripped
-    e = n - 1
-    mantissa = stripped if k == 1 else stripped[0] + "." + stripped[1:]
-    return f"{sign}{mantissa}e{'+' if e >= 0 else '-'}{abs(e)}"
+    """JS `String(n)` — 카카오에 보내는 좌표 글자. 127 → '127', 37.5 → '37.5', 1e-7 → '1e-7' (app.shared.js.js_number_to_string과 같음)"""
+    return js_number_to_string(value)
 
 
-# JS `/\S역$/`의 \S — JS 공백이 아닌 글자 (파이썬 \S는 \x1c~\x1f · \x85를 공백으로 보고 U+FEFF는 공백으로 안 봐서 따로 만듦)
+# JS `/\S역$/`의 \S — JS 공백이 아닌 글자 (파이썬 \S는 ~ · 를 공백으로 보고 U+FEFF는 공백으로 안 봐서 따로 만듦)
 _STATION_QUERY = re.compile(r"[^" + re.escape(JS_WHITESPACE) + r"]역\Z")
 
 

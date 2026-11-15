@@ -41,7 +41,7 @@ from .commit_core import diff_alarms, resolve_enabled
 from .db import db_fail, must
 from .draft import PlaceInput
 from .edit import pick_base_row
-from .js import from_ms, js_round, ms, parse_iso, to_iso
+from .js import from_ms, js_max, js_min, js_number, js_round, ms, parse_iso, to_iso
 from .plan import (
     ALARM_COLUMNS,
     SERIES_APPOINTMENT_COLUMNS,
@@ -166,21 +166,7 @@ DAY_MS = 86_400_000
 
 def _js_number(v: Any) -> float | int:
     """JS `Number(v)` — null은 0, 글자는 숫자로 읽고 못 읽으면 NaN, bool은 0 · 1"""
-    if v is None:
-        return 0
-    if isinstance(v, bool):
-        return int(v)
-    if isinstance(v, int | float):
-        return v
-    if isinstance(v, str):
-        text = v.strip()
-        if not text:
-            return 0
-        try:
-            return float(text)
-        except ValueError:
-            return math.nan
-    return math.nan
+    return js_number(v)
 
 
 def _finite(v: Any) -> bool:
@@ -195,7 +181,7 @@ def _finite(v: Any) -> bool:
 
 # 길찾기가 실패한 횟수 → 다음 시도 시각
 def retry_at(now: datetime, failures: int) -> datetime:
-    return from_ms(ms(now) + RETRY_HOURS[min(max(failures, 0), len(RETRY_HOURS) - 1)] * HOUR_MS)
+    return from_ms(ms(now) + RETRY_HOURS[js_min(js_max(failures, 0), len(RETRY_HOURS) - 1)] * HOUR_MS)
 
 
 # 루틴 steps(JSON) → 단계마다 시작 시각 (0시부터 분, 자정을 넘으면 1440 이상). 순서는 단계 순서(= alarms.step_order − 1)

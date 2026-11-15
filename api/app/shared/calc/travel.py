@@ -9,7 +9,7 @@ import math
 from datetime import datetime
 from typing import Any, TypedDict
 
-from ..js import js_floor, js_round, ms
+from ..js import js_floor, js_max, js_min, js_round, ms
 from .time import MINUTE_MS
 
 __all__ = [
@@ -51,13 +51,13 @@ def haversine_km(a: dict[str, float], b: dict[str, float]) -> float:
         math.sin(d_lat / 2) ** 2
         + math.cos(rad(a["lat"])) * math.cos(rad(b["lat"])) * math.sin(d_lng / 2) ** 2
     )
-    return 2 * 6371 * math.asin(min(1, math.sqrt(h)))
+    return 2 * 6371 * math.asin(js_min(1, math.sqrt(h)))
 
 
 def estimate_travel_minutes(from_: dict[str, float], to: dict[str, float], transport: str) -> int:
     """근사식: haversine 거리(km) ÷ 속도 × 60 × 우회 계수 1.3. 사용자 확인 없이 저장하지 않음"""
     minutes = (haversine_km(from_, to) / AVERAGE_SPEED_KMH[transport]) * 60 * DETOUR_FACTOR
-    return max(1, js_round(minutes))
+    return js_max(1, js_round(minutes))
 
 
 def median_same_route(
@@ -81,4 +81,4 @@ def median_same_route(
         return None
     mid = js_floor(len(minutes) / 2)
     median = minutes[mid] if len(minutes) % 2 else (minutes[mid - 1] + minutes[mid]) / 2
-    return {"minutes": max(1, js_round(median)), "sampleCount": len(minutes)}
+    return {"minutes": js_max(1, js_round(median)), "sampleCount": len(minutes)}

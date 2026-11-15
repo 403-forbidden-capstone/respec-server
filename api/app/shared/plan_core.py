@@ -12,13 +12,11 @@ TS의 undefined는 None으로 다룸 (draft의 `with_wake`처럼 "없음"이 뜻
 """
 
 import math
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from app.core.read import JS_WHITESPACE
 from app.shared.calc.chain import alarm_chain, departure_at
 from app.shared.calc.intensity import (
     AXES_PICKER_ENABLED,
@@ -44,7 +42,17 @@ from app.shared.calc.validate import check_alarms
 from app.shared.calc.wake import SameDayWake, is_evening_wake
 from app.shared.commit_core import resolve_enabled
 from app.shared.draft import AlarmFields, ParticipantFields, PlaceInput
-from app.shared.js import from_ms, js_round, ms, parse_iso, to_iso
+from app.shared.js import (
+    from_ms,
+    js_max,
+    js_min,
+    js_number,
+    js_number_to_string,
+    js_round,
+    ms,
+    parse_iso,
+    to_iso,
+)
 from app.shared.tz import safe_time_zone
 
 # ---- DB에서 읽은 행 (필요한 칸만) — 모양만 적어 둠, 값은 dict ----
@@ -61,25 +69,9 @@ ParticipantRow = Mapping[str, Any]
 AlarmRow = dict[str, Any]
 
 
-_NUMBER_TEXT = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", re.ASCII)
-
-
 def _js_number(v: Any) -> float | int:
     """JS `Number(v)` — 숫자 · 숫자 글자 · 불리언. 못 읽으면 NaN"""
-    if isinstance(v, bool):
-        return int(v)
-    if isinstance(v, int | float):
-        return v
-    if isinstance(v, str):
-        s = v.strip(JS_WHITESPACE)
-        if not s:
-            return 0
-        if s in ("Infinity", "+Infinity"):
-            return math.inf
-        if s == "-Infinity":
-            return -math.inf
-        return float(s) if _NUMBER_TEXT.fullmatch(s) else math.nan
-    return math.nan
+    return js_number(v)
 
 
 def _or_zero(n: float | int) -> float | int:
@@ -177,8 +169,8 @@ def clamp_prepare_to_bound(prepare: Any, bound: Mapping[str, float]) -> Any:
     """자동 준비시간을 기준 값 ±within분 안으로 — 직접 고른 값(MANUAL)은 그대로. 설명용 칸(개인 보정)은 합이 맞게 같이 바꿈"""
     if prepare["source"] == "MANUAL":
         return prepare
-    auto = min(
-        max(prepare["autoMinutes"], bound["around"] - bound["within"]), bound["around"] + bound["within"]
+    auto = js_min(
+        js_max(prepare["autoMinutes"], bound["around"] - bound["within"]), bound["around"] + bound["within"]
     )
     if auto == prepare["autoMinutes"]:
         return prepare
@@ -404,7 +396,7 @@ def infer_before_prepare(
         and wake["time_source"] != "MANUAL"
         and prepare_minutes is not None
     ):
-        wake_shift = max(
+        wake_shift = js_max(
             0,
             js_round(
                 (
@@ -462,13 +454,13 @@ def compute_plan(i: PlanInputs, travel: Any, mode: str = "save") -> Plan:
     chosen_minutes = chosen.minutes
 
     # 받아들인 준비 알람 당김 (#484 · 안건 D111) — 계획의 준비 시간 · 준비 전 활동은 원래 값 그대로 두고 알람 사슬만 당김(calc/chain.py)
-    advance = max(
+    advance = js_max(
         0,
         _or_zero(
             _js_number(_first(i.participant.get("prepare_advance_minutes") if i.participant else None, 0))
         ),
     )
-    existing_advance = max(0, _or_zero(_js_number(_first(i.existing_advance_minutes, advance))))
+    existing_advance = js_max(0, _or_zero(_js_number(_first(i.existing_advance_minutes, advance))))
 
     def derive(with_wake: bool) -> tuple[Any, Any]:
         if i.draft.before_prepare_minutes is not None:
@@ -674,7 +666,7 @@ def intensity_reason(basics: Any, it: Any) -> str:
 
 def _js_str(n: Any) -> str:
     """JS `${n}` — 3.0은 3"""
-    return str(int(n)) if isinstance(n, float) and n.is_integer() else str(n)
+    return js_number_to_string(n) if isinstance(n, int | float) else str(n)
 
 
 def to_suggestion(plan: Plan, inputs: PlanInputs | None = None) -> dict[str, Any]:

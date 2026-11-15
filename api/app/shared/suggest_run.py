@@ -13,7 +13,7 @@ from typing import Any
 
 from .calc.suggest import SUGGEST_ROUND_TO, suggest_prepare_advance
 from .db import db_fail, must
-from .js import to_iso
+from .js import js_max, js_min, js_number_to_string, to_iso
 from .supabase import Db
 
 MAX_ADVANCE_MINUTES = 120
@@ -27,9 +27,7 @@ SuggestionInsert = dict[str, Any]
 
 def _num_str(value: int | float) -> str:
     """JS `String(n)` — 정수로 떨어지는 실수는 소수점 없이 (5.0 → '5')"""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
+    return js_number_to_string(value)
 
 
 def plan_suggestions(rows: list[SuggestInputRow] | tuple[SuggestInputRow, ...]) -> list[SuggestionInsert]:
@@ -37,14 +35,14 @@ def plan_suggestions(rows: list[SuggestInputRow] | tuple[SuggestInputRow, ...]) 
     out: list[SuggestionInsert] = []
     for row in rows:
         advance = row.get("current_advance")
-        current = max(0, 0 if advance is None else advance)
+        current = js_max(0, 0 if advance is None else advance)
         room = math.floor((MAX_ADVANCE_MINUTES - current) / SUGGEST_ROUND_TO) * SUGGEST_ROUND_TO
         before = row.get("before_prepare_minutes")
         s = suggest_prepare_advance(
             {
                 "residuals": row["residuals"],
                 "beforePrepareMinutes": math.inf if before is None else before,
-                "capMinutes": min(row["cap_minutes"], room),
+                "capMinutes": js_min(row["cap_minutes"], room),
             }
         )
         if not s:
