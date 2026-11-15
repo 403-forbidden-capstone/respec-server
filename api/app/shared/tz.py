@@ -9,7 +9,7 @@ from datetime import datetime
 from functools import lru_cache
 from zoneinfo import ZoneInfo, available_timezones
 
-from .js import RangeError, from_ms, js_floor, js_round, ms, pad_start, utc_ms
+from .js import RangeError, from_ms, js_floor, js_max, js_round, ms, pad_start, utc_ms
 
 __all__ = [
     "format_ko_duration",
@@ -129,7 +129,7 @@ def format_ko_spoken_time(d: datetime, time_zone: str) -> str:
 
 def format_ko_duration(minutes: float) -> str:
     """시간 길이 글자 "30분" · "1시간" · "1시간 10분" (분은 정수)"""
-    total = max(0, js_round(minutes))
+    total = js_max(0, js_round(minutes))
     h = js_floor(total / 60)
     m = total % 60
     return " ".join(p for p in (f"{h}시간" if h else "", f"{m}분" if m or not h else "") if p)
@@ -138,6 +138,10 @@ def format_ko_duration(minutes: float) -> str:
 def safe_time_zone(time_zone: str | None) -> str:
     """모르는 시간대 이름이면 기본값 (profiles.timezone은 DB 트리거가 검사하지만 방어)"""
     tz = time_zone or "Asia/Seoul"
+    if (
+        tz != tz.strip() or not tz.isascii() or "\x00" in tz
+    ):  # Intl은 앞뒤 공백 · 이상한 글자가 든 이름을 거절
+        return "Asia/Seoul"
     try:
         _zone(tz)
         return tz

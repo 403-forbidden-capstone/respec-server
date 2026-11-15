@@ -18,6 +18,7 @@ from ..js import (
     RangeError,
     from_ms,
     js_floor,
+    js_max,
     js_trim,
     ms,
     pad_start,
@@ -211,7 +212,7 @@ def next_routine_at(args: dict[str, Any] | None = None, /, **kwargs: Any) -> dat
     if not days:
         return None
     tz = safe_time_zone(timeZone)
-    offset = max(0, js_floor(stepOffsetMinutes))
+    offset = js_max(0, js_floor(stepOffsetMinutes))
     key = add_days_to_key(
         local_date_key(now, tz), -js_floor(offset / 1440)
     )  # 자정을 넘는 단계는 시작한 날로 거슬러 올라가 봄

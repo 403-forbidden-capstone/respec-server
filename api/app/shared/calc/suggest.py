@@ -8,9 +8,10 @@
 결과 PrepareAdvance = {minutes, wakeMinutes, evidence, overrun}
 """
 
+import math
 from typing import Any, NotRequired, TypedDict
 
-from ..js import js_floor
+from ..js import js_floor, js_max, js_min
 
 __all__ = [
     "SUGGEST_DEFAULT_RULE",
@@ -50,7 +51,7 @@ def _mean(xs: list[float]) -> float:
     total = 0
     for x in xs:  # sum()은 소수를 보정해 더해서 JS reduce와 끝자리가 다를 수 있어 앞에서부터 그대로 더함
         total = total + x
-    return total / len(xs)
+    return total / len(xs) if xs else math.nan  # JS 0/0 = NaN (비교는 전부 false)
 
 
 def detect_overrun(residuals: list[float], rule: dict[str, Any] | None = None) -> list[float] | None:
@@ -69,13 +70,13 @@ def detect_overrun(residuals: list[float], rule: dict[str, Any] | None = None) -
 def size_advance(overrun: float, cap_minutes: float) -> int:
     """준비 알람을 얼마나 당길지 — 5분 단위로 내림, 상한 안. 5분이 안 되면 0 (제안 안 함)"""
     floored = js_floor(overrun / SUGGEST_ROUND_TO) * SUGGEST_ROUND_TO
-    capped = min(floored, js_floor(cap_minutes / SUGGEST_ROUND_TO) * SUGGEST_ROUND_TO)
+    capped = js_min(floored, js_floor(cap_minutes / SUGGEST_ROUND_TO) * SUGGEST_ROUND_TO)
     return capped if capped >= SUGGEST_ROUND_TO else 0
 
 
 def wake_shift(advance: float, before_prepare_minutes: float) -> float:
     """준비 전 시간이 모자란 만큼만 기상도 — 준비 알람은 기상보다 앞설 수 없음"""
-    return max(0, advance - max(0, before_prepare_minutes))
+    return js_max(0, advance - js_max(0, before_prepare_minutes))
 
 
 def suggest_prepare_advance(input: SuggestInput) -> PrepareAdvance | None:

@@ -11,7 +11,7 @@
 import math
 from typing import Any, Literal, NotRequired, TypedDict
 
-from ..js import js_ceil, js_floor, js_number, js_round
+from ..js import js_ceil, js_floor, js_max, js_number, js_round
 from .types import Importance
 
 __all__ = [
@@ -86,7 +86,7 @@ PREPARE_RECORD_MAX = 240
 
 def predict_prepare(input: PrepareInput) -> PrepareBasis:
     """input = {commonP80, personalP80?, sampleCount, prior?, override?} → PrepareBasis"""
-    n = max(0, js_floor(input["sampleCount"]))
+    n = js_max(0, js_floor(input["sampleCount"]))
     prior = input.get("prior")
     k = prior if prior is not None else PREPARE_PRIOR_K
     weight = n / (n + k) if n + k > 0 else 0
@@ -177,7 +177,7 @@ def recent_prepare_of(stats: dict[str, Any]) -> list[int]:
 
 def prepare_source_label(sample_count: float) -> str:
     """계산 근거에 보이는 출처 한 줄 (H03 · H05) — 5건부터 "내 기록 기반 N건", 4건까지는 "배우는 중 N/5". 통계 식 · P80 같은 말은 화면에 안 보임 (D47)"""
-    n = max(0, js_floor(sample_count))
+    n = js_max(0, js_floor(sample_count))
     return f"내 기록 기반 {n}건" if n >= PERSONAL_MIN_SAMPLES else f"배우는 중 {n}/{PERSONAL_MIN_SAMPLES}"
 
 

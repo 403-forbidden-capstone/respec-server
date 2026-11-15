@@ -97,24 +97,16 @@ def _as_number(value: Any) -> int | float | None:
 
 def _js_str(value: int | float) -> str:
     """JS `${n}` — 90 · -90 · 0.5 처럼 (문구에 들어가는 경계값용)"""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
+    from ..shared.js import js_number_to_string  # js.py가 이 파일을 import해서 순환을 피함
+
+    return js_number_to_string(value)
 
 
 def _js_stringify(value: Any) -> str:
-    """JS `JSON.stringify` 글자 수를 재기 위한 직렬화 — 공백 없음 · 한글 그대로 · 5.0은 5"""
+    """JS `JSON.stringify` 글자 수를 재기 위한 직렬화 — 공백 없음 · 한글 그대로 · 숫자는 JS 글자(5.0은 5, 1e21은 1e+21) · NaN · Infinity는 null"""
+    from ..shared.js import js_json  # js.py가 이 파일을 import해서 순환을 피함
 
-    def plain(v: Any) -> Any:
-        if isinstance(v, float) and v.is_integer():
-            return int(v)
-        if isinstance(v, list):
-            return [plain(x) for x in v]
-        if isinstance(v, dict):
-            return {k: plain(x) for k, x in v.items()}
-        return v
-
-    return json.dumps(plain(value), separators=(",", ":"), ensure_ascii=False)
+    return js_json(value)
 
 
 class Reader:

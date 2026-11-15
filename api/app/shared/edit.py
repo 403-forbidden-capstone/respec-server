@@ -24,7 +24,7 @@ from .calc import SameDayWake, has_earlier_wake
 from .draft import (
     UNSET,  # TS의 `undefined` — 요청에 그 칸이 없음 (None은 TS의 null = 반복 끔). 한 곳(draft)에서만 만듦
 )
-from .js import js_round, ms, parse_iso, to_iso
+from .js import js_number, js_round, ms, parse_iso, to_iso
 
 # ---------------------------------------------------------------------------
 # 범위 · 예외 표시
@@ -129,8 +129,10 @@ def _same_coord(a: Any, b: float | None) -> bool:
 
 def _number(value: Any) -> int | float:
     """JS `Number(v)` — 글자 · 숫자 어느 쪽이든 숫자로. 정수 값은 int로 (JSON에 37 → 37.0이 되지 않게)"""
-    number = float(value)
-    return int(number) if number.is_integer() else number
+    number = js_number(value)
+    return (
+        int(number) if isinstance(number, float) and number.is_integer() and abs(number) < 2**53 else number
+    )
 
 
 class PatchResult(TypedDict):
@@ -305,7 +307,13 @@ def wake_action(
     return {"action": "NONE", "earlierAfter": earlier_after}
 
 
+def _u16(s: Any) -> Any:
+    """JS 글자 비교는 UTF-16 코드 단위 순 (Python은 코드포인트 순 — 이모지 등이 U+E000~FFFF 글자와 뒤바뀜)"""
+    return s.encode("utf-16-be", "surrogatepass") if isinstance(s, str) else s
+
+
 def _compare(a: Any, b: Any) -> int:
+    a, b = _u16(a), _u16(b)
     return -1 if a < b else 1 if a > b else 0
 
 
