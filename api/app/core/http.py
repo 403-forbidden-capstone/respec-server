@@ -11,6 +11,7 @@ Edge `serve()`가 하던 일을 맨 바깥 미들웨어 하나가 함:
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -48,13 +49,26 @@ def request_id_of(sent: str | None) -> str:
     return sent if sent and REQUEST_ID_PATTERN.fullmatch(sent) else str(uuid.uuid4())
 
 
+def _finite_or_null(value: object) -> object:
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _finite_or_null(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_finite_or_null(v) for v in value]
+    return value
+
+
 class EdgeJSONResponse(JSONResponse):
     """Edge `jsonResponse`와 같은 Content-Type (charset 포함), 한글을 \\u 로 풀어쓰지 않음"""
 
     media_type = JSON_CONTENT_TYPE
 
     def render(self, content: object) -> bytes:
-        text = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+        # JSON.stringify처럼 NaN · ±Infinity는 null (json.dumps 기본값은 `Infinity` 글자 = JSON 아님)
+        text = json.dumps(
+            _finite_or_null(content), ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
         # JS JSON.stringify는 짝 없는 서로게이트를 \udXXX 이스케이프로 내보냄 — 그대로 두면 UTF-8로 못 만들어 500
         text = _LONE_SURROGATE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
         return text.encode("utf-8")

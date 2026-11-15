@@ -1,4 +1,4 @@
-"""카카오 로컬 호출 — 본 레포 `supabase/functions/_shared/kakao.ts`(장소 검색 · 좌표 → 주소 부분)의 서버판.
+"""카카오 호출 — 본 레포 `supabase/functions/_shared/kakao.ts`의 서버판 (장소 검색 · 좌표 → 주소 + 이동시간 `kakao_travel_minutes`).
 
 인증은 `Authorization: KakaoAK {REST API 키}`. 응답은 저장 · 재사용하지 않음 (카카오 약관) — 아무것도 기억하지 않고 돌려주기만 함.
 좌표 · 검색어는 URL 쿼리로만 나가고 로그 · 오류 글에는 안 남김 (httpx 로그는 WARNING 이상만 — main.py).
@@ -6,11 +6,22 @@
 
 import asyncio
 import json
+import math
 from typing import Any
 
 import httpx
 
-from .kakao_parse import Place, asks_for_station, js_number_str, parse_places, parse_reverse, rank_places
+from .kakao_parse import (
+    Place,
+    asks_for_station,
+    js_number_str,
+    parse_car_directions,
+    parse_places,
+    parse_reverse,
+    parse_transit,
+    parse_walk,
+    rank_places,
+)
 
 KAKAO_TIMEOUT_SECONDS = 4.0  # 설계 7.1.2 "타임아웃 4초"
 
@@ -20,12 +31,16 @@ COORD2ADDRESS_URL = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
 SUBWAY_CATEGORY = "SW8"  # 카카오 카테고리 그룹 코드: 지하철역
 SUBWAY_FIRST_SIZE = 5
 
+TRANSIT_URL = "https://dapi.kakao.com/v2/routing/publictraffic"
+WALK_URL = "https://dapi.kakao.com/v2/routing/walk"
+CAR_URL = "https://apis-navi.kakaomobility.com/v1/directions"
+
 
 class KakaoError(Exception):
-    """kind: TIMEOUT · AUTH · RATE_LIMIT · HTTP · BAD_RESPONSE. 메시지에는 좌표 · 검색어를 안 넣음"""
+    """kind: TIMEOUT · AUTH · RATE_LIMIT · NO_ROUTE · HTTP · BAD_RESPONSE. 메시지에는 좌표 · 검색어를 안 넣음"""
 
-    def __init__(self, kind: str, status: int | None = None) -> None:
-        super().__init__(kind)
+    def __init__(self, kind: str, status: int | None = None, message: str | None = None) -> None:
+        super().__init__(message or kind)
         self.kind = kind
         self.status = status
 
@@ -107,3 +122,87 @@ async def reverse_address(
     """지도 핀 좌표의 주소. 주소가 없는 곳(바다 · 국외 등)은 None. 좌표를 로그 · 오류 글에 남기지 않음"""
     params = {"x": js_number_str(lng), "y": js_number_str(lat)}  # x = 경도, y = 위도
     return parse_reverse(await _get_json(client, COORD2ADDRESS_URL, params, key))
+
+
+# ---------------------------------------------------------------------------
+# 이동시간 (alarm-suggest · alarm-commit)
+# ---------------------------------------------------------------------------
+
+
+def _coord(point: dict[str, float]) -> str:
+    return f"{js_number_str(point['lng'])},{js_number_str(point['lat'])}"
+
+
+def _to_minutes(seconds: int | float) -> int:
+    return max(0, math.ceil(seconds / 60))  # 올림: 모자라게 잡아 늦는 것보다 낫게
+
+
+def _unwrap(parsed: dict[str, Any]) -> dict[str, Any]:
+    if parsed["ok"]:
+        return parsed
+    kind = "NO_ROUTE" if parsed["reason"] == "NO_ROUTE" else "BAD_RESPONSE"
+    raise KakaoError(kind, message=f"경로를 못 찾았어요 ({parsed.get('detail') or parsed['reason']})")
+
+
+async def _walk_seconds(
+    client: httpx.AsyncClient, key: str, start: dict[str, float], end: dict[str, float]
+) -> int | float:
+    params = {
+        "start_x": js_number_str(start["lng"]),
+        "start_y": js_number_str(start["lat"]),
+        "end_x": js_number_str(end["lng"]),
+        "end_y": js_number_str(end["lat"]),
+    }
+    return _unwrap(parse_walk(await _get_json(client, WALK_URL, params, key)))["seconds"]
+
+
+async def kakao_travel_minutes(
+    client: httpx.AsyncClient,
+    key: str,
+    *,
+    origin: dict[str, float],
+    destination: dict[str, float],
+    transport: str,
+) -> dict[str, Any]:
+    """이동 수단에 맞는 카카오 API로 분 단위 이동시간을 구함 → {minutes, partial}. 실패하면 KakaoError.
+    대중교통 · 버스 · 지하철: 대중교통 경로 + (응답에 빠진) 출발지 → 첫 승차 · 마지막 하차 → 목적지 도보를 도보 API로 더함.
+    앞뒤 도보를 못 구하면 대중교통 구간만 (partial: True)"""
+    if transport == "CAR":
+        params = {"origin": _coord(origin), "destination": _coord(destination), "priority": "RECOMMEND"}
+        car = _unwrap(parse_car_directions(await _get_json(client, CAR_URL, params, key)))
+        return {"minutes": _to_minutes(car["seconds"]), "partial": False}
+
+    if transport == "WALK":
+        return {
+            "minutes": _to_minutes(await _walk_seconds(client, key, origin, destination)),
+            "partial": False,
+        }
+
+    params = {
+        "start_x": js_number_str(origin["lng"]),
+        "start_y": js_number_str(origin["lat"]),
+        "end_x": js_number_str(destination["lng"]),
+        "end_y": js_number_str(destination["lat"]),
+    }
+    wanted = "BUS" if transport == "BUS" else "SUBWAY" if transport == "SUBWAY" else None
+    transit = _unwrap(parse_transit(await _get_json(client, TRANSIT_URL, params, key), wanted))
+
+    seconds = transit["seconds"]
+    partial = False
+    legs = []
+    if not transit["startsWithWalk"]:
+        if "firstPoint" in transit:
+            legs.append(_walk_seconds(client, key, origin, transit["firstPoint"]))
+        else:
+            partial = True  # 첫 승차 지점을 응답에서 못 읽음
+    if not transit["endsWithWalk"]:
+        if "lastPoint" in transit:
+            legs.append(_walk_seconds(client, key, transit["lastPoint"], destination))
+        else:
+            partial = True
+    for leg in await asyncio.gather(*legs, return_exceptions=True):
+        if isinstance(leg, BaseException):
+            partial = True
+        else:
+            seconds += leg
+    return {"minutes": _to_minutes(seconds), "partial": partial}

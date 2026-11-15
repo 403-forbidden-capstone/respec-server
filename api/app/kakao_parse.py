@@ -1,7 +1,7 @@
 """카카오 응답 읽기 — 본 레포 `supabase/functions/_shared/kakao-parse.ts`(장소 검색 · 좌표 → 주소 부분)의 서버판.
 
 순수 함수라 샘플 JSON으로 시험함 (tests/test_kakao_parse.py — Edge의 kakao-parse.test.ts 샘플을 그대로 옮김).
-이동시간(대중교통 · 도보 · 자동차) 읽기는 알람 계산을 옮길 때(2-6) 같이 옮김.
+이동시간(대중교통 · 도보 · 자동차) 읽기(parse_transit · parse_walk · parse_car_directions)는 알람 계산 옮기기(W2)에서 더함 — 결과는 Edge와 같은 키 이름의 dict (없는 값은 키 자체를 뺌).
 JS와 같게 맞춘 곳: 숫자 문자열 읽기(빈 글자 = 0, 앞뒤 공백 무시, 무한대 · NaN 거절) · trim · 정수로 떨어지는 숫자는 정수로 내보냄(37.0이 아니라 37).
 """
 
@@ -162,3 +162,116 @@ def parse_reverse(json_value: Any) -> dict[str, Any] | None:
         "roadAddress": road_address or None,
         "buildingName": building_name or None,
     }
+
+
+def _num_at(items: Any, index: int) -> int | float | None:
+    """JS `num(p[index])` — 배열 밖 칸(undefined)은 None"""
+    return to_number(items[index]) if isinstance(items, list) and 0 <= index < len(items) else None
+
+
+def _point(value: Any) -> dict[str, int | float] | None:
+    if not isinstance(value, list):
+        return None
+    lng = _num_at(value, 0)
+    lat = _num_at(value, 1)
+    return {"lat": lat, "lng": lng} if lat is not None and lng is not None else None
+
+
+def parse_transit(json_value: Any, wanted: str | None = None) -> dict[str, Any]:
+    """가장 빨리 가는 경로 하나. wanted('BUS' · 'SUBWAY')로 버스만 · 지하철만 고를 수 있고, 맞는 게 없으면 전체에서 고름.
+    성공: {ok: True, seconds, startsWithWalk, endsWithWalk, firstPoint?, lastPoint?} · 실패: {ok: False, reason, detail?}"""
+    if not _is_object(json_value):
+        return {"ok": False, "reason": "BAD_RESPONSE"}
+    status = text_of(json_value.get("status"))
+    if status == "EQUAL_POINTS":
+        return {"ok": True, "seconds": 0, "startsWithWalk": True, "endsWithWalk": True}
+    if status in ("NO_RESULTS", "STARTNODES_NULL", "ENDNODES_NULL"):
+        return {"ok": False, "reason": "NO_ROUTE", "detail": status}
+    raw_routes = json_value.get("routes")
+    if status != "OK" or not isinstance(raw_routes, list):
+        return {"ok": False, "reason": "BAD_RESPONSE", "detail": status}
+
+    routes: list[dict[str, Any]] = []
+    for route in raw_routes:
+        if not _is_object(route):
+            continue
+        props = route.get("properties") if _is_object(route.get("properties")) else {}
+        seconds = to_number(props.get("totalTime"))
+        if seconds is not None:
+            routes.append({"r": route, "seconds": seconds, "type": text_of(props.get("type"))})
+    if not routes:
+        return {"ok": False, "reason": "NO_ROUTE"}
+    preferred = [x for x in routes if x["type"] == wanted] if wanted else routes
+    pool = preferred or routes
+    best = pool[0]
+    for candidate in pool[1:]:  # JS reduce((a, b) => (b.seconds < a.seconds ? b : a)) — 같으면 앞의 것
+        if candidate["seconds"] < best["seconds"]:
+            best = candidate
+
+    raw_steps = best["r"].get("steps")
+    steps = [s for s in raw_steps if _is_object(s)] if isinstance(raw_steps, list) else []
+
+    def type_of(step: dict[str, Any] | None) -> str:
+        return text_of(step["properties"].get("type")) if step and _is_object(step.get("properties")) else ""
+
+    def points(step: dict[str, Any] | None) -> list[Any]:
+        if step and _is_object(step.get("path")) and isinstance(step["path"].get("points"), list):
+            return step["path"]["points"]
+        return []
+
+    first = steps[0] if steps else None
+    last = steps[-1] if steps else None
+    first_points = points(first)
+    last_points = points(last)
+    result: dict[str, Any] = {
+        "ok": True,
+        "seconds": best["seconds"],
+        "startsWithWalk": type_of(first) == "WALKING",
+        "endsWithWalk": type_of(last) == "WALKING",
+    }
+    first_point = _point(first_points[0]) if first_points else None
+    last_point = _point(last_points[-1]) if last_points else None
+    if first_point is not None:
+        result["firstPoint"] = first_point
+    if last_point is not None:
+        result["lastPoint"] = last_point
+    return result
+
+
+def parse_walk(json_value: Any) -> dict[str, Any]:
+    if not _is_object(json_value):
+        return {"ok": False, "reason": "BAD_RESPONSE"}
+    status = text_of(json_value.get("status"))
+    if status == "SAME_POINT":
+        return {"ok": True, "seconds": 0}
+    route = json_value.get("route")
+    if status == "OK" and _is_object(route) and _is_object(route.get("properties")):
+        seconds = to_number(route["properties"].get("totalTime"))
+        if seconds is not None:
+            return {"ok": True, "seconds": seconds}
+        return {"ok": False, "reason": "BAD_RESPONSE", "detail": status}
+    no_route = (
+        "START_LINK_NOT_FOUND",
+        "END_LINK_NOT_FOUND",
+        "TOO_MANY_SEARCH_LINK",
+        "TOO_FAR_AWAY",
+        "ROUTE_RESULT_NOT_FOUND",
+    )
+    return {"ok": False, "reason": "NO_ROUTE" if status in no_route else "BAD_RESPONSE", "detail": status}
+
+
+def parse_car_directions(json_value: Any) -> dict[str, Any]:
+    routes = json_value.get("routes") if _is_object(json_value) else None
+    first = next((r for r in routes if _is_object(r)), None) if isinstance(routes, list) else None
+    if first is None:
+        return {"ok": False, "reason": "BAD_RESPONSE"}
+    code = to_number(first.get("result_code"))
+    if code == 104:
+        return {"ok": True, "seconds": 0}  # 출발지와 목적지가 같음
+    if code != 0:
+        shown = "?" if code is None else js_number_str(code)
+        return {"ok": False, "reason": "NO_ROUTE", "detail": f"result_code {shown}"}
+    seconds = to_number(first["summary"].get("duration")) if _is_object(first.get("summary")) else None
+    if seconds is None:
+        return {"ok": False, "reason": "BAD_RESPONSE", "detail": "summary.duration"}
+    return {"ok": True, "seconds": seconds}

@@ -198,3 +198,13 @@ def test_access_log_has_no_query_string_or_headers(client, signer, caplog):
         "37.5665" not in line and "카페" not in line and "Bearer" not in line for line in lines
     )
     assert "path=/health " in lines[0]
+
+
+def test_edge_json_response_writes_non_finite_numbers_as_null():
+    """JSON.stringify와 같게 응답의 NaN · ±Infinity는 null (PR #9 리뷰 고칠 것 1)"""
+    from app.core.http import EdgeJSONResponse
+
+    assert (
+        EdgeJSONResponse({"a": float("inf"), "b": [float("nan")], "c": 1.5}).body
+        == b'{"a":null,"b":[null],"c":1.5}'
+    )

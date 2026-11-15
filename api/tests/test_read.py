@@ -168,3 +168,55 @@ def test_issues_never_echo_input_values():
     r.number("lat")
     text = json.dumps(issues_of(r), ensure_ascii=False)
     assert "SECRET-SEARCH" not in text and "37.5509" not in text
+
+
+# ---- read.ts의 나머지 읽기 함수 (appointment-edit 요청 읽기가 씀) ----
+
+
+def test_bool_one_of_uuid_date_object_and_is_null():
+    import re
+    from datetime import UTC, datetime
+
+    from app.core.read import parse_iso
+
+    uid = "11111111-1111-4111-8111-111111111ABC"
+    r = Reader.root(
+        {
+            "flag": True,
+            "bad_flag": "true",
+            "pick": "A",
+            "bad_pick": "Z",
+            "id": uid,
+            "bad_id": uid + "\n",
+            "at": "2026-10-29T10:00:00+09:00",
+            "bad_at": "2026-10-29T10:00:00",
+            "obj": {"x": 1},
+            "arr": [1],
+            "nothing": None,
+            "rule": "FREQ=DAILY",
+            "bad_rule": "daily",
+        }
+    )
+    assert r.bool("flag") is True
+    assert r.bool("bad_flag") is None
+    assert r.one_of("pick", ["A", "B"]) == "A"
+    assert r.one_of("bad_pick", ["A", "B"]) is None
+    assert r.uuid("id") == uid.lower()  # 소문자로
+    assert r.uuid("bad_id") is None  # 끝 줄바꿈도 거절 (JS `$`와 같게)
+    assert r.date("at") == datetime(2026, 10, 29, 1, 0, tzinfo=UTC)
+    assert r.date("bad_at") is None
+    assert r.object("obj").value == {"x": 1}
+    assert r.object("arr") is None
+    assert r.is_null("nothing") and not r.is_null("missing") and not r.is_null("flag")
+    assert r.string("rule", pattern=re.compile(r"^FREQ=(DAILY|WEEKLY)$")) == "FREQ=DAILY"
+    assert r.string("bad_rule", pattern=re.compile(r"^FREQ=(DAILY|WEEKLY)$")) is None
+    assert [(i["path"], i["message"]) for i in r.issues] == [
+        ("bad_flag", "true · false여야 해요"),
+        ("bad_pick", "A · B 중 하나여야 해요"),
+        ("bad_id", "UUID 형식이 아니에요"),
+        ("bad_at", "시각은 오프셋이 있는 ISO 8601이어야 해요 (예: 2026-10-20T10:00:00+09:00)"),
+        ("arr", "객체여야 해요"),
+        ("bad_rule", "형식이 맞지 않아요"),
+    ]
+    assert parse_iso("2026-02-30T10:00:00Z") is None  # 없는 날짜
+    assert parse_iso("2026-10-29T10:00Z") == datetime(2026, 10, 29, 10, 0, tzinfo=UTC)  # 초 생략 · Z
