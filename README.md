@@ -8,6 +8,7 @@ Re:Spec Alarm 서버(FastAPI · EC2). Supabase Edge 함수가 하던 알람 계�
 | 이상이 생겼을 때 되돌리기 · SQL · 데모 전날 점검표 | [`docs/runbook.md`](docs/runbook.md) |
 | 서버(EC2)를 처음부터 다시 세우기 | [`deploy/server-setup.md`](deploy/server-setup.md) |
 | AWS를 전부 끊는 순서 | [`docs/종료_런북.md`](docs/종료_런북.md) |
+| 팀원이 서버를 보는 길 · 공용 열쇠로 접속(Termius · 터미널) | [`docs/team-access.md`](docs/team-access.md) |
 | 서버 코드 설명(토큰 검사 · 오류 모양 · 스케줄러 · 설정 이름) | [`api/README.md`](api/README.md) |
 | Edge와 서버 결과 대조 시험 | [`dev/contract/README.md`](dev/contract/README.md) |
 
