@@ -1,7 +1,8 @@
 """서버 쪽 예약 작업 본문을 한 번 돌림 (계약 시험 전용) — 스케줄러가 server 모드에서 부르는 것과 같은 본문(`app/jobs_server.py`)을
 지금 시각으로 한 번 돌리고, Edge 응답과 같은 모양의 JSON을 마지막 줄에 찍음. Expo 주소는 가짜 서버(fake_expo.py)로 바꿔 끼움.
 
-  api 폴더에서, 로컬 스택 api.env를 환경 변수로 넣고:  python ../dev/contract/server_job.py wake-check | suggestion-generate
+  시험 틀(harness.server_job)이 부름 — 환경은 허용 목록(clean_env.server_env)으로 만들어 넘기므로 직접 돌릴 땐 같은 환경이 필요함.
+  api 폴더에서:  python ../dev/contract/server_job.py wake-check | suggestion-generate
   마지막 줄: {"ok": true, "result": {…}} 또는 {"ok": false, "error": "…"}"""
 
 from __future__ import annotations

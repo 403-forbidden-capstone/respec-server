@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
@@ -22,6 +21,7 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
+import clean_env  # noqa: E402
 import local_stack as ls  # noqa: E402
 
 DB_CONTAINER = "supabase_db_respec-server-dev"
@@ -101,7 +101,6 @@ JOB_FUNCS = {
     "suggestion-generate",
 }  # 서버에는 HTTP 길이 없는 예약 작업 — server_job.py로 본문을 직접 돌림
 API_DIR = HERE.parent.parent / "api"
-API_ENV = HERE.parent / ".stack" / "api.env"
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -235,16 +234,6 @@ def dump() -> dict[str, list[dict[str, Any]]]:
     return sql_json(f"select json_build_object({selects});")
 
 
-def _load_env_file(path: Path) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, value = line.split("=", 1)
-            out[key.strip()] = value.strip().strip('"').strip("'")
-    return out
-
-
 def server_job(fn: str) -> tuple[int, Any]:
     """서버 쪽 예약 작업 본문 한 번 (Edge의 HTTP 응답과 같은 모양을 (200, JSON)으로, 실패는 (500, {error}))"""
     python = (
@@ -255,7 +244,7 @@ def server_job(fn: str) -> tuple[int, Any]:
     done = subprocess.run(
         [str(python), str(HERE / "server_job.py"), fn],
         cwd=API_DIR,
-        env={**os.environ, **_load_env_file(API_ENV)},
+        env=clean_env.server_env(),  # 셸의 운영 값(카카오 · PREPARE_ML_* 등)은 버리고 api.env만 (clean_env.py)
         capture_output=True,
         text=True,
         encoding="utf-8",

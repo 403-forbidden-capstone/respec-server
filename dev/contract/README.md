@@ -14,6 +14,7 @@
 - 연결은 `127.0.0.1`과 격리 스택 컨테이너(`supabase_db_respec-server-dev`)뿐. 경우마다 데이터 표를 `truncate`하므로 **이 스택이 아닌 DB에 쓰지 말 것**.
 - 시험 계정(`contract-{a,b,c}@example.test`)은 고정 id로 격리 스택 안에만 만듦. 비밀번호도 로컬 전용 값.
 - Edge · 서버 코드는 안 고침. Expo 주소만 실행 때 가짜 서버로 바꿔 끼움(아래).
+- 서버 쪽 프로세스(`serve_server.py` · `server_job.py`)에는 셸 환경을 그대로 넘기지 않고 허용 목록(`clean_env.py`: PATH · 임시 · 사용자 폴더 등)과 `api.env`만 넘김. 셸에 운영 `KAKAO_REST_API_KEY` · `PREPARE_ML_*` 같은 값이 남아 있어도 서버로만 새어 들어가지 않음(`api/tests/test_dev_contract_env.py`가 지킴). Edge는 도커 안에서 돌아 셸 환경을 받지 않음.
 
 ## 준비 (순서대로)
 
@@ -21,11 +22,12 @@
 
 | 할 일 | 명령 (서버 레포 맨 위) |
 |---|---|
-| `env`가 `api.env`에 안 쓰는 키 더하기 | `dev/.stack/api.env`에 `SUPABASE_PUBLISHABLE_KEY=<로컬 anon 키>`를 한 줄 더함 (없으면 서버가 `NOT_CONFIGURED` 503) |
+| 서버 의존성 | `cd api && uv sync` ([docs/local-dev.md](../../docs/local-dev.md) 1단계). `api/.venv`가 있어야 예약 작업 실행기(`server_job.py`)가 돎 |
+| `SUPABASE_PUBLISHABLE_KEY` | 따로 할 일 없음 — `local_stack.py env`가 `api.env`에 안 써 주는 이 키(없으면 서버가 `NOT_CONFIGURED` 503)를 시험 틀이 로컬 스택 `supabase status -o env`의 anon 키로 채워 서버에 넘김(`api.env`는 안 고침). 직접 적으려면 `npx supabase@2.119.0 --workdir dev/.stack status -o env`의 `PUBLISHABLE_KEY`(없으면 `ANON_KEY`) 값을 `dev/.stack/api.env`에 `SUPABASE_PUBLISHABLE_KEY=<값>` 한 줄로 |
 | 가짜 Expo 서버 (28999) | `python dev/contract/fake_expo.py` |
 | Edge 사본의 Expo 주소를 가짜로 | `python dev/contract/patch_edge_expo.py` (`dev/.stack` 안 사본만 고침. `prepare`를 다시 하면 되돌아가니 그 뒤엔 다시 실행) |
 | Edge 띄우기 | `npx supabase@2.119.0 --workdir dev/.stack functions serve` |
-| 서버 띄우기 | `api/`에서 `.stack/api.env`를 환경 변수로 넣고 `python ../dev/contract/serve_server.py` (28000. uvicorn과 같고 Expo 주소만 가짜) |
+| 서버 띄우기 | `cd api && uv run --env-file ../dev/.stack/api.env python ../dev/contract/serve_server.py` (28000. uvicorn과 같고 Expo 주소만 가짜). **local-dev.md 5단계의 서버(방법 A · B 모두 같은 28000)는 띄우지 말고 이걸로 대신함** |
 
 Edge는 도커 안에서 돌아 가짜 서버를 `host.docker.internal:28999`로 부름.
 
@@ -35,7 +37,7 @@ Edge는 도커 안에서 돌아 가짜 서버를 `host.docker.internal:28999`로
 python dev/contract/run.py                          # 전부 (7그룹 · 230경우, 5분쯤)
 python dev/contract/run.py --group wake,editpush    # 그룹만
 python dev/contract/run.py --only "토큰 없음"        # 이름에 글자가 든 경우만
-python dev/contract/run.py --out 결과.json           # 경우별 요약(응답 · 보낸 푸시)과 다른 곳을 저장
+python dev/contract/run.py --out dev/.stack/계약시험.json   # 경우별 요약(응답 · 보낸 푸시)과 다른 곳을 저장 (dev/.stack은 .gitignore 대상)
 ```
 
 | 그룹 | 대상 | 경우 |
