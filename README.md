@@ -33,7 +33,7 @@ flowchart LR
 - **스위치 표** `public.server_routes (kind, name, mode)`: 함수 줄(앱이 부르는 Edge 함수) = `edge` · `canary`(지정 계정만) · `server`, 작업 줄(예약 작업) = `edge` · `shadow`(세기만) · `server`. 앱은 호출 때 표를 보고 Edge · 서버 중 고르고(읽기 함수는 서버가 못 쓸 상태면 자동으로 Edge), pg_cron은 서버가 멈추면 Edge로 이어받음. 표를 못 읽으면 전부 `edge`.
 - **scheduler**는 api와 같은 이미지에 시작 명령만 다름. 1분마다 `server_heartbeat.alive_at`을 갱신하고(`/health/deep`이 15분 넘게 멈추면 감시 메일), 작업 줄이 `shadow` · `server`인 작업만 함.
 - 서버가 부르는 곳: Supabase(DB · 로그인 공개 키), 카카오(장소 · 길찾기), Expo Push(푸시 모듈). 비밀값은 서버 env 파일에만(`/srv/respec/*.env`, 이름 목록 = `.env.example`).
-- 예측 켜기 값(`PREPARE_ML_ENABLED` · `_ALLOWED_USER_IDS` · `_CODEBOOK_VERSION`)은 서버 전용 설정 표 `server_settings`로 옮기는 중(2-3, 서버 PR 대기). 지금 서버는 예측을 안 부름(`prepare-ml`이 안 떠 있음, 1-11 대기).
+- 예측 켜기 값(`prepare_ml_enabled` · `prepare_ml_allowed_user_ids` · `prepare_ml_codebook_version`)은 서버 전용 설정 표 `public.server_settings`에서 읽음(2-3, 30초 캐시 · 읽기 실패면 직전 값, 처음부터 실패면 꺼짐). env에는 없음 — 바꾸려면 SQL 편집기에서 표를 고치고 `/health/deep`의 `ml`(켜짐 · 판 · 허용 계정 수 · `source`)로 확인. 주소 · 토큰(`PREPARE_ML_URL` · `_API_TOKEN`)만 env. 지금 서버는 예측을 안 부름(`prepare-ml`이 안 떠 있음, 1-11 대기).
 
 ## 2. 배포 길
 

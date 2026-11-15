@@ -3,7 +3,9 @@
   GET · HEAD /health  프로세스가 떠 있는가만 (DB · 외부를 안 부름 → 배포 직후 · 컨테이너 헬스체크용). 본문에 version(배포 태그)
   GET · HEAD /health/deep  공개 키(JWKS) · DB(PostgREST) · 스케줄러 최근 실행까지. 하나라도 실패하면 503.
                       토큰 없이 부를 때마다 서버 키로 DB를 부르므로 결과를 짧게(기본 5초) 재사용 — 실패 결과도 (장애 중 DB를 두드리지 않게)
-응답에는 검사 이름과 ok / fail만 — 주소 · 키 · 오류 원문은 안 실음.
+응답에는 검사 이름과 ok / fail만 — 주소 · 키 · 오류 원문은 안 실음. 예외로 `ml`(예측 설정 항목: 켜짐 · 코드북 판 · 허용 계정 **수** ·
+  읽은 곳)은 서버 설정 표(shared/server_settings.py, 캐시 30초)의 현재 값이라 표를 SQL 편집기로 바꾸면 1분 안에 여기 보임 — 계정 id는 안 실음.
+  `ml.source`: table(방금 표에서 읽음) · stale(읽기에 실패해 직전 값) · unavailable(한 번도 못 읽어 예측 꺼짐). `ml`은 정보라 status · HTTP 상태에 안 들어감.
 """
 
 import asyncio
@@ -16,6 +18,7 @@ from fastapi import APIRouter, Request
 
 from ..core.http import EdgeJSONResponse
 from ..core.supabase import rest_headers, rest_url
+from ..shared.server_settings import predict_settings
 
 router = APIRouter()
 log = logging.getLogger("respec.health")
@@ -85,7 +88,9 @@ async def health_deep(request: Request) -> EdgeJSONResponse:
 
 async def _deep_check(request: Request) -> tuple[dict, int]:
     settings = request.app.state.settings
-    auth_result, rows = await asyncio.gather(_check_auth(request), _read_heartbeat(request))
+    auth_result, rows, ml = await asyncio.gather(
+        _check_auth(request), _read_heartbeat(request), predict_settings()
+    )
 
     checks = {
         "auth": auth_result,
@@ -99,4 +104,10 @@ async def _deep_check(request: Request) -> tuple[dict, int]:
         checks["scheduler"] = "skipped"
 
     healthy = all(v in ("ok", "skipped") for v in checks.values())
-    return {"status": "ok" if healthy else "fail", "checks": checks}, 200 if healthy else 503
+    ml_info = {
+        "enabled": ml.settings.enabled,
+        "codebook_version": ml.settings.codebook_version,
+        "allowed_count": ml.settings.allowed_count,
+        "source": ml.source,
+    }
+    return {"status": "ok" if healthy else "fail", "checks": checks, "ml": ml_info}, 200 if healthy else 503

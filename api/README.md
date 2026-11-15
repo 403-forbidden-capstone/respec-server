@@ -68,6 +68,24 @@
 | `APP_VERSION` | 아니오 | 배포 태그(`sha-…`). compose가 api · scheduler에 넣어 줌. `/health`의 `version`, 없으면 `dev`. `/health`는 토큰 없이 부를 수 있으므로 **배포 태그 말고 다른 값은 넣지 않음** |
 | `HEALTH_DEEP_CACHE_SECONDS` | 아니오 | `/health/deep` 결과 재사용 시간(초), 기본 5, **0~60만 받음**. 0은 캐시만 끔(확인은 한 번에 하나씩 순서대로 함) |
 | `LOG_LEVEL` | 아니오 | 기본 `INFO` (대소문자 무관, DEBUG · INFO · WARNING · ERROR · CRITICAL) |
+| `PREPARE_ML_URL` · `PREPARE_ML_API_TOKEN` | 아니오 | 준비시간 예측 서버 주소 · 토큰(비밀). 둘 다 있어야 예측 호출 후보가 됨. **켜기 조건 3개(켜짐 · 허용 계정 · 코드북 판)는 env가 아니라 아래 서버 설정 표** |
+
+## 예측 켜기 조건 — 서버 설정 표 (`app/shared/server_settings.py`, S7a · 완결점 2-3)
+
+준비시간 예측(CatBoost, 실험)을 켜는 조건 3개를 서버가 본 레포 `public.server_settings` 표(#525)에서 읽음. 혜린님이 SSH 없이 Supabase SQL 편집기에서 바꿈. 예측 서버 주소 · 토큰만 env(`PREPARE_ML_URL` · `PREPARE_ML_API_TOKEN`).
+
+| 표 키 | 값 | 비어 있거나 없으면 |
+|---|---|---|
+| `prepare_ml_enabled` | `1`이면 켜짐 (`0` · 그 밖은 꺼짐) | 꺼짐 |
+| `prepare_ml_allowed_user_ids` | 쉼표로 이은 UUID | 아무도 안 됨 |
+| `prepare_ml_codebook_version` | 공식 매핑 판 이름 | 예측 안 함 |
+
+- **표가 항상 이김**: 이 3개는 env로 읽지 않음(`Settings`에 칸이 없음). 서버 `api.env`에 옛 `PREPARE_ML_ENABLED` 등이 남아 있어도 무시되므로 지워도 되고 안 지워도 됨
+- 읽기: 서비스 키로 표 3줄을 한 번에, **메모리에 30초** 재사용(요청마다 DB를 안 부름). 예측 서버 주소 · 토큰이 없거나 그 계획이 예측을 허용하지 않으면 표는 읽지도 않음
+- 읽기 실패(DB 오류 · 표 없음)면 **직전에 읽은 값을 계속 씀**, 처음부터 못 읽으면 **예측 꺼짐**. 실패 뒤 10초 뒤에 다시 시도. 로그는 오류 코드만
+- `/health/deep`의 `ml`: `{"enabled", "codebook_version", "allowed_count", "source"}` — 켜짐 · 코드북 판 · 허용 계정 **수**(계정 id는 안 보임) · 읽은 곳(`table` 방금 표에서 / `stale` 읽기 실패로 직전 값 / `unavailable` 한 번도 못 읽어 꺼짐). 정보라 `status`와 HTTP 상태에는 안 들어감
+- 표를 바꾸면 **최대 30초 + `/health/deep` 결과 캐시(기본 5초) 안에** `/health/deep`에 보임 (완결점 2-3: 1분 안)
+- 확인 절차(운영): Supabase 대시보드 SQL Editor에서 `update public.server_settings set value = '<허용할 user_id>' where key = 'prepare_ml_allowed_user_ids';` 한 줄 → 1분 안에 `GET /health/deep`(토큰 없이)의 `ml.allowed_count`가 바뀜. 값 바꾸는 문장 모음은 본 레포 `supabase/ops/server-settings.sql`
 
 ## 스케줄러 (`app/scheduler.py` · `jobs.py` · `db.py`, S3 · 완결점 1-10)
 

@@ -38,6 +38,7 @@ from .prepare_ml import (
     request_ml_prediction,
 )
 from .route import ResolvedTravel, TravelChoice, TravelDeps, resolve_travel
+from .server_settings import predict_settings
 from .supabase import Db, create_service_client
 from .tz import local_day_range, safe_time_zone
 
@@ -54,7 +55,7 @@ class PlanContext:
         None  # 원본의 fetchImpl 자리 — 카카오 · 예측 서버 호출. 없으면 호출마다 임시 클라이언트
     )
     settings: Settings | None = (
-        None  # 원본은 Deno.env(PREPARE_ML_*)를 직접 읽음. 서버는 Settings로 (없으면 예측 꺼짐)
+        None  # 예측 서버 주소 · 토큰(PREPARE_ML_URL · _API_TOKEN)은 Settings(env). 켜기 조건 3개는 서버 설정 표 (없으면 예측 꺼짐)
     )
 
 
@@ -296,18 +297,21 @@ async def _optional_ml_prediction(
     feature flag and verified, persisted survey codes exist. All failures fall
     back to the original P80-based preparation-time calculation."""
     settings = ctx.settings
-    if settings is None:
-        return None
-    if not may_use_ml(
-        enabled=(settings.prepare_ml_enabled or "").strip() == "1",
-        allow_for_plan=allow,
-        user_id=ctx.user_id,
-        allowed_user_ids=settings.prepare_ml_allowed_user_ids,
-    ):
+    if settings is None or not allow:
         return None
     url = (settings.prepare_ml_url or "").strip()
     token = settings.prepare_ml_api_token.get_secret_value().strip() if settings.prepare_ml_api_token else ""
     if not url or not token:
+        return None  # 예측 서버가 안 붙어 있으면 표를 읽을 일도 없음
+    # 켜기 조건 3개(켜짐 · 허용 계정 · 코드북 판)는 서버 설정 표에서 (캐시 30초 — 요청마다 DB를 안 부름).
+    # 읽기에 실패하면 직전 값, 처음부터 실패면 꺼짐 (server_settings.py)
+    ml = (await predict_settings()).settings
+    if not may_use_ml(
+        enabled=ml.enabled,
+        allow_for_plan=allow,
+        user_id=ctx.user_id,
+        allowed_user_ids=ml.allowed_user_ids,
+    ):
         return None
 
     try:
@@ -324,7 +328,7 @@ async def _optional_ml_prediction(
         row = profile_result.data
         if profile_result.error or not row:
             return None
-        verified = approved_ml_profile(row, (settings.prepare_ml_codebook_version or "").strip() or None)
+        verified = approved_ml_profile(row, ml.codebook_version)
         if not verified:
             return None
 
