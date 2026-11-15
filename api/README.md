@@ -9,6 +9,8 @@
 | `GET` · `HEAD /health` | 프로세스가 떠 있는가만. 본문 `{"status":"ok","version":"<배포 태그>"}` (`version` = env `APP_VERSION`, 없으면 `dev`) | 없음 |
 | `GET` · `HEAD /health/deep` | 공개 키(JWKS) · DB(PostgREST) · 스케줄러 최근 실행. 하나라도 실패면 503. 결과를 5초(`HEALTH_DEEP_CACHE_SECONDS`) 재사용(실패 포함) | 없음 |
 | `GET /me` | 토큰 주인의 `{"id": ...}` | 필요 |
+| `POST /fn/place-search` | 장소 검색(카카오 로컬). Edge `place-search`와 같은 요청 · 응답 — 아래 "장소 함수" | 필요 |
+| `POST /fn/place-reverse` | 좌표 → 주소(카카오 로컬). Edge `place-reverse`와 같은 요청 · 응답 | 필요 |
 | `OPTIONS *` | CORS 사전 확인. 토큰 없이 204 | 없음 |
 
 `/docs` · `/redoc` · `/openapi.json`은 꺼 둠(404). 끝에 `/`를 붙인 주소(`/me/`)도 리다이렉트 없이 404.
@@ -58,6 +60,7 @@
 | `SUPABASE_JWT_ISSUER` | 아니오 | 토큰의 `iss`가 `SUPABASE_URL/auth/v1`과 다를 때만 |
 | `SUPABASE_JWKS_URL` | 아니오 | 공개 키 목록 주소가 기본(`SUPABASE_URL/auth/v1/.well-known/jwks.json`)과 다를 때만 (로컬 compose: 컨테이너가 호스트의 Supabase를 부르는 주소) |
 | `SUPABASE_SECRET_KEY` | scheduler는 예, api는 `/health/deep`에 | 서버 전용 Supabase 키(`sb_secret_…`). PostgREST로 `server_routes` · `server_heartbeat`를 읽고 `server_heartbeat`에 씀(scheduler), `/health/deep`이 `server_heartbeat`를 읽음(api). 없으면 **scheduler는 시작하지 않고 종료 코드 1**, api는 deep의 db 검사가 실패 |
+| `KAKAO_REST_API_KEY` | `/fn/place-*`에 | 카카오 REST API 키(카카오 로컬 사용 설정이 켜진 것). **없으면 `/fn/place-*`가 `NOT_CONFIGURED`(503)** — 앱은 읽기 함수의 이 오류를 Edge로 한 번 더 보내므로 서버가 떠 있으면 키를 넣기 전에 표를 켜도 동작은 안전함. 단 `.env.example`에는 필수 이름이라 표준 배포 길(`deploy.sh`의 `check-env.sh`)에서는 값이 비면 배포 전 점검이 막음. 값은 로그 · 응답에 안 나옴 |
 | `JWT_AUDIENCE` | 아니오 | 기본 `authenticated` |
 | `JWT_LEEWAY_SECONDS` | 아니오 | 시계 어긋남 허용, 기본 10 |
 | `JWKS_CACHE_TTL_SECONDS` · `JWKS_MIN_REFETCH_SECONDS` · `HTTP_TIMEOUT_SECONDS` | 아니오 | 기본 600 · 10 · 3 |
@@ -99,6 +102,42 @@
 실패는 루프를 안 멈춤: DB 호출 실패 · 작업의 예외는 로그(오류 종류 · 상태 번호만)를 남기고 다음 회차로 감. 하트비트 쓰기 실패는 1분 뒤 다시 시도(`alive_at`이 멈추면 감시가 알림). `last_success_at`은 서버 시계로 씀(EC2는 NTP 동기화 — `run_job`의 12분 창에 비해 오차가 작음).
 
 **한계**: 키가 아예 없으면 스케줄러가 바로 종료(코드 1)해 배포 직후 점검에서 드러나지만, 키가 틀려(401) 쓰기가 계속 실패하거나 M1이 적용되지 않았을 땐 죽지 않고 1분마다 경고만 남김 — 이때는 `/health/deep`의 db 검사 · 감시가 잡음. 동기 단일 스레드라 한 작업이 오래 걸리면 같은 틱의 하트비트 · 다른 작업이 밀림(3차 핸들러에 시간 상한을 둘 것).
+
+## 장소 함수 (`routers/places.py` · `kakao.py` · `kakao_parse.py` · `core/read.py`, S4 · 완결점 1-12)
+
+Edge `place-search` · `place-reverse`의 서버판 — 앱이 `callEdge()`로 표(`server_routes`)에 따라 주소만 바꿔 부름(본 레포 M2, 서버 설계 S3). 웹 비유: 같은 API를 Express에서 FastAPI로 옮기되 URL의 앞부분만 다르고(`/functions/v1/<이름>` → `/fn/<이름>`) 요청 · 응답 · 오류 JSON은 같음(다른 곳은 아래 "알려진 차이"만).
+
+| | `POST /fn/place-search` | `POST /fn/place-reverse` |
+|---|---|---|
+| 요청 | `{ query(1~100자), lat?, lng?, limit?(1~15, 기본 10) }` — lat · lng는 같이 | `{ lat, lng }` 둘 다 필수 |
+| 응답 | `{ places: [{ id, name, address, lat, lng, category? }] }`, 결과가 없으면 빈 배열 | `{ place: { address, roadAddress, buildingName } \| null }` — 주소 없는 곳(바다 · 국외)은 `null` |
+
+순서는 Edge와 같음: **토큰 확인(401) → 입력 검사(400, `details.issues[{path, message}]`) → 키 확인(503 `NOT_CONFIGURED`) → 카카오 호출 → 오류 번역**.
+
+| 카카오 쪽 | 서버가 돌려주는 것 |
+|---|---|
+| 401 · 403 (키가 틀림 · 카카오 로컬 사용 설정이 꺼짐) | 503 `NOT_CONFIGURED` |
+| 429 | 429 `RATE_LIMITED` |
+| 시간 초과(4초) · 5xx · 연결 실패 · 깨진 응답 · 그 밖의 상태 | 502 `PLACE_UNAVAILABLE` |
+
+- 검색: 정확도순으로 부르고 기준 좌표(x = 경도, y = 위도)는 치우침으로만 씀. 같은 이름의 여러 지점(스타벅스)은 기준 좌표에서 가까운 순. 검색어가 "…역"으로 끝나면 지하철역(SW8)을 따로 찾아 맨 위에 두고(겹치는 곳은 한 번), 이 보조 호출이 실패해도 본 검색은 계속함
+- **JS와 맞춘 곳** (같은 입력이 같은 결과가 되도록 `core/read.py` · `kakao_parse.py`): 글자 수는 UTF-16 단위(이모지 하나 = 2) · trim은 JS가 지우는 글자 · `true`는 숫자가 아님 · `NaN` · `Infinity`는 JSON이 아님 · `5.0`은 정수 · `1e400`은 숫자가 아님 · 본문 맨 앞 UTF-8 BOM은 지움(Fetch `req.text()`와 같음) · 짝 없는 서로게이트(`\ud800`)는 검색어에서 U+FFFD로 바뀌고 응답에는 `\udXXX`로 나감 · 카카오 키 앞뒤 공백은 JS trim으로 지움 · 카카오 좌표 글자 `""`는 0 · 카카오로 보내는 좌표 글자와 응답 좌표는 JS 숫자 형식(`37.0` → `37`, `1e-7`) · "…역" 판정의 공백도 JS 기준
+- **알려진 차이** (앱에 영향 없음, 같게 맞추지 않음): `OPTIONS`는 서버 204 · Edge 200 · 이 두 주소에 GET은 405(Edge 모양 오류) · 정수가 4300자리를 넘거나 깊이 3000 넘게 중첩된 본문은 서버가 "JSON 형식이 아니에요" 400, Edge는 필드별 이슈 400 · 16진수 숫자 글자(`Number("0x10")` = 16)는 서버가 숫자로 안 읽음 · 응답 본문의 아주 작은 좌표 글자는 모양만 다름(`-1.2345e-05` ↔ `-0.000012345`, JSON으로 읽으면 같은 값) · 리다이렉트(3xx)는 서버가 안 따라가 502(카카오 HTTPS 엔드포인트는 안 함)
+- 키 · 좌표 · 검색어는 로그 · 오류 본문에 안 남김(위 "로그에 안 남기는 것"). 응답은 저장하지 않음(카카오 약관)
+- **Edge 기대값 대조 시험**(Edge ↔ 서버를 한꺼번에 돌리는 시험이 아님 — Edge가 카카오 주소를 코드에 고정해 못 함): `tests/test_kakao_parse.py`는 Edge `_shared/kakao-parse.test.ts`의 샘플 · 기대값을 그대로 옮긴 것이라 서버판이 같은 값을 내면 같은 응답이 나감. `tests/test_read.py` · `tests/test_places.py`는 입력 검사 문구 · 순서 · 오류 번역표를 HTTP 수준에서 대조함. **Edge의 기대값이 바뀌면 이 시험도 같이 바꿀 것**
+- **재생 스크립트** `dev/replay_places.py`: 고정 입력 20건(검색 10 · 주소 7 · 잘못된 입력 3)을 `--rounds`번(기본 3 = 양쪽 60건) Edge · 서버에 번갈아 보냄. 아래가 전부 맞아야 통과(종료 코드 0), 아니면 1:
+  - 요청이 양쪽 30건 이상 (첫 바퀴는 Edge 콜드 스타트를 빼려고 데우기로 버리고 셈에 안 넣음, `--no-warmup`으로 끔)
+  - 케이스마다 양쪽이 **기대한 상태**로 답함 — 정상 입력 200 · 잘못된 입력 400. 양쪽이 똑같이 502(키 만료 · 한도 초과)여도 "같은 오류"로 통과하지 않음. 서버 5xx는 한 번이라도 있으면 실패
+  - 같은 입력의 응답(상태 + JSON)이 Edge · 서버에서 같음. 어긋나면 케이스 이름과 양쪽 상태 번호를 찍음
+  - 같은 입력으로 잰 p95가 서버 ≤ Edge. 클라이언트에서 연결을 매번 새로 맺어 재므로 서버 처리 시간 자체가 아니라 연결 포함 값임(클라이언트 → EC2와 클라이언트 → Supabase 경로도 다름)
+
+  canary 24시간 · 서버 5xx 0(nginx 로그) · Edge 자동 대체 0(앱 로그)은 이 스크립트가 재지 않음. 환경 변수 `REPLAY_SUPABASE_URL` · `REPLAY_ANON_KEY` · `REPLAY_EMAIL` · `REPLAY_PASSWORD`(점검용 시험 계정) · `REPLAY_SERVER_URL`로만 받고 화면 · 파일에 안 찍음:
+  ```bash
+  python dev/replay_places.py
+  ```
+- **서버 로그 확인 (끝 칸 1-12 ④)**: 재생 뒤 서버 로그에 토큰 · 좌표 · 검색어가 0건이어야 함. 패턴은 재생 입력 목록에서 만든 것을 씀(입력이 바뀌어도 어긋나지 않게) — 환경 변수 없이 `python dev/replay_places.py --print-grep`으로 찍어, 서버(EC2)에서는 `docker logs respec-api-1 2>&1 | grep -E "<찍힌 패턴>"`(로컬은 `docker compose -f compose.local.yml logs api | grep -E …`) 결과가 비어 있어야 함. 서버 compose는 `API_TAG` 환경 변수가 필수라 `docker compose logs`를 그냥 부르면 실패할 수 있어 컨테이너 이름으로 읽음
+- 켜는 순서: ① 서버 env에 `KAKAO_REST_API_KEY` 반영 ② 재생 스크립트 통과 ③ 표에서 `place-search` · `place-reverse`를 `canary`(시험 계정만, `server_route_users`)로 — 본 레포 `supabase/README.md` "서버 전환 스위치" ④ 24시간 동안 요청 30건 이상 · 서버 5xx 0 · Edge 자동 대체 0 확인 ⑤ 안 되면 `edge`로 한 줄(`update server_routes set mode = 'edge' where kind = 'function' and name = '…'`). 끝나도 값은 `canary`로 둠(전체 전환은 2-6과 같이)
+- 켜기 전 앱 쪽 전제: canary가 서버를 부르려면 서버 주소(`EXPO_PUBLIC_API_BASE_URL`)가 든 M2 빌드 · 웹 빌드여야 함(옛 APK는 계속 Edge만 부름) · `server_route_users`의 사용자는 `profiles`에 있는 계정 · 앱은 표를 최대 5분 뒤에 반영함. ④의 "서버 5xx 0"은 nginx 접근 로그의 상태 열에서, "Edge 자동 대체 0"은 앱 로그(`__DEV__` 빌드만)에서 셈 — 재생 스크립트는 이 둘을 재지 않음
 
 ## 컨테이너 (`Dockerfile`)
 

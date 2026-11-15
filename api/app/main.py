@@ -17,7 +17,7 @@ from .core.config import Settings
 from .core.errors import AppError, code_for_status, error_body
 from .core.http import EdgeCompatMiddleware, EdgeJSONResponse, error_response
 from .core.jwks import JwksCache
-from .routers import health, me
+from .routers import health, me, places
 
 
 def create_app(
@@ -64,10 +64,12 @@ def create_app(
         return error_response(exc)
 
     @app.exception_handler(StarletteHTTPException)
-    async def _http_error(_: Request, exc: StarletteHTTPException) -> EdgeJSONResponse:
+    async def _http_error(request: Request, exc: StarletteHTTPException) -> EdgeJSONResponse:
         # FastAPI 기본 404 · 405 · … 를 Edge 모양으로. 메시지는 Edge의 한국어 문구 · 원문(detail)은 안 씀
         code = code_for_status(exc.status_code)
         messages = {404: "찾을 수 없어요", 405: "허용되지 않는 요청이에요"}
+        if exc.status_code == 405 and request.url.path.startswith("/fn/"):
+            messages[405] = "POST만 받아요"  # Edge serve()의 문구 — 함수 주소(/fn/*)는 POST만 받음
         # 상태 번호는 원래 것을 그대로 (표에 없는 413 등을 500 · 400으로 바꾸지 않음). 본문 코드만 Edge 표에서 고름
         body = error_body(code, messages.get(exc.status_code, "요청을 처리하지 못했어요"))
         return EdgeJSONResponse(body, status_code=exc.status_code, headers=exc.headers)
@@ -82,5 +84,6 @@ def create_app(
 
     app.include_router(health.router)
     app.include_router(me.router)
+    app.include_router(places.router)
     app.add_middleware(EdgeCompatMiddleware)  # 맨 바깥 (마지막에 더한 것이 가장 바깥)
     return app
