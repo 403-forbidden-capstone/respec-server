@@ -11,7 +11,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 NG="$DEPLOY_DIR/nginx"
 
 echo "[1] 열린 주소(location)가 화이트리스트와 같음"
-got=$(grep -E '^\s*location ' "$NG/respec-api.conf" | grep -v 'location @' | sed -E 's/^\s+//; s/\s*\{\s*$//' | sort | tr '\n' '|')
+got=$(grep -E '^\s*location ' "$NG/respec-api.conf" | sed -E 's/^\s+//; s/\s*\{\s*$//' | sort | tr '\n' '|')
 # 'location /' 은 두 번: 80 번 서버의 443 넘김, 443 번 서버의 마지막 404 처리
 want=$(printf '%s\n' \
   'location ^~ /fn/' 'location = /me' 'location = /health' 'location = /health/deep' \
@@ -49,16 +49,12 @@ assert_contains "쿼리스트링이 붙으면 400" "$conf" 'if ($args != "") {'
 assert_eq "기본 서버(80 · 443) 접속 기록 끔" 2 "$(grep -c 'access_log off;' "$NG/respec-api.conf")"
 assert_eq "HTTP 모양의 기본 서버도 접속 기록 끔" 1 "$(grep -c 'access_log off;' "$NG/respec-api.http.conf")"
 
-echo "[3c] nginx 가 직접 만드는 오류 응답에도 CORS · 요청 번호 · JSON 본문"
+echo "[3c] nginx 가 직접 만드는 오류 응답에도 CORS · 요청 번호 (본문은 그대로 — 앱이 JSON 이 아닌 본문은 상태 번호로 판정)"
 assert_contains "ACAO 는 변수로(upstream 이 안 붙인 경우만)" "$conf" 'add_header Access-Control-Allow-Origin $respec_cors_origin always;'
 assert_contains "Expose-Headers 도 변수로" "$conf" 'add_header Access-Control-Expose-Headers $respec_cors_expose always;'
 assert_contains "X-Request-Id 도 변수로" "$conf" 'add_header X-Request-Id $respec_request_id_header always;'
 assert_not_contains "ACAO 를 고정값으로 붙이면 api 응답에 두 번 나감" "$conf" 'add_header Access-Control-Allow-Origin "*"'
 assert_contains "ml 주소는 CORS 범위에서 뺌" "$glob" '~^/ml(/|$)  "ml";'
-for st in 400 404 405 413 429 502 504; do
-  assert_contains "error_page $st" "$conf" "error_page $st @err_$st;"
-  assert_contains "@err_$st 가 같은 상태로 JSON 응답" "$conf" "location @err_$st { internal; default_type \"application/json; charset=utf-8\"; return $st '{\"error\":{\"code\":"
-done
 # 위치 안에 add_header 가 있으면 서버 수준 add_header(HSTS · CORS …)를 물려받지 못함 → 443 서버 블록의 location 에는 add_header 를 두지 않음
 loc_adds=$(awk '/^server \{/ {n++} n==4 && /^    location / {inloc=1} inloc && /add_header/ {c++} inloc && /^    }/ {inloc=0} END {print c+0}' "$NG/respec-api.conf")
 assert_eq "443 서버 블록의 location 안 add_header 수" 0 "$loc_adds"
@@ -89,7 +85,7 @@ else
   done
 fi
 
-echo "[5] 실제 nginx 로 응답 동작 (오류 응답의 CORS · 요청 번호 · JSON 본문, api 응답은 헤더 중복 없음) — docker 엔진이 있을 때"
+echo "[5] 실제 nginx 로 응답 동작 (오류 응답의 CORS · 요청 번호, api 응답은 헤더 중복 없음) — docker 엔진이 있을 때"
 if ! docker info >/dev/null 2>&1; then
   echo "  skip docker 엔진이 없어 응답 동작 시험을 건너뜀 (CI 에서 돎)"
 else
@@ -121,7 +117,7 @@ else
       assert_eq "nginx $ver 동작: $name" ok "$status"
       [[ $status == ok ]] || echo "      $detail"
     done <<<"$res"
-    assert_eq "nginx $ver 동작 시험 항목 수(41개)" 1 "$([[ $n -ge 41 ]] && echo 1 || echo 0)"
+    assert_eq "nginx $ver 동작 시험 항목 수(32개)" 1 "$([[ $n -ge 32 ]] && echo 1 || echo 0)"
   done
 fi
 

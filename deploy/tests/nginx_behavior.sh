@@ -52,15 +52,11 @@ expect "404: Access-Control-Allow-Origin" "*" "$(hval access-control-allow-origi
 expect "404: Access-Control-Allow-Origin 한 번만" 1 "$(hcount access-control-allow-origin)"
 expect "404: Access-Control-Expose-Headers" "x-request-id" "$(hval access-control-expose-headers)"
 expect "404: X-Request-Id 있음" 1 "$(hcount x-request-id)"
-expect "404: Content-Type" "application/json; charset=utf-8" "$(hval content-type)"
-expect_has "404: 본문 code" "$(body)" '"code":"NOT_FOUND"'
-expect_has "404: 본문 한글이 안 깨짐" "$(body)" '찾을 수 없는 주소입니다'
 
 # 5 쿼리스트링 → 400
 req "https://api.respecalarm.com/health?x=1"
 expect "쿼리스트링 400 상태" 400 "$code"
 expect "쿼리스트링 400: Access-Control-Allow-Origin" "*" "$(hval access-control-allow-origin)"
-expect_has "쿼리스트링 400: 본문 code" "$(body)" '"code":"VALIDATION_FAILED"'
 
 # 6 요청 번호: 안전한 값은 그대로, 이상한 값은 버리고 새 번호
 req -H 'X-Request-Id: abc-123' https://api.respecalarm.com/admin
@@ -73,18 +69,15 @@ expect "X-Request-Id 이상한 값은 버리고 새 번호" 1 "$([[ -n $rid && $
 req https://api.respecalarm.com/ml/health
 expect "502 상태(예측 서버 없음)" 502 "$code"
 expect "502(ml): CORS 안 붙임" 0 "$(hcount access-control-allow-origin)"
-expect_has "502(ml): 본문 code" "$(body)" '"code":"INTERNAL"'
 req https://api.respecalarm.com/fn/boom
 expect "502 상태(api 가 연결을 끊음)" 502 "$code"
 expect "502(api): Access-Control-Allow-Origin" "*" "$(hval access-control-allow-origin)"
-expect_has "502(api): 본문 code" "$(body)" '"code":"INTERNAL"'
 
 # 8 413: api 주소(1m 초과)는 CORS 붙임, ml 주소(4k 초과)는 안 붙임
 head -c 2097152 /dev/zero >"$T/big"
 req -X POST -H 'Expect:' --data-binary @"$T/big" https://api.respecalarm.com/fn/x
 expect "413 상태(api, 1m 초과)" 413 "$code"
 expect "413(api): Access-Control-Allow-Origin" "*" "$(hval access-control-allow-origin)"
-expect_has "413(api): 본문 code" "$(body)" '"code":"VALIDATION_FAILED"'
 head -c 5000 /dev/zero >"$T/mid"
 req -X POST -H 'Expect:' --data-binary @"$T/mid" https://api.respecalarm.com/ml/predict
 expect "413 상태(ml, 4k 초과)" 413 "$code"
@@ -93,7 +86,6 @@ expect "413(ml): CORS 안 붙임" 0 "$(hcount access-control-allow-origin)"
 # 9 405 (ml 주소는 POST 만)
 req https://api.respecalarm.com/ml/predict
 expect "405 상태" 405 "$code"
-expect_has "405: 본문 code" "$(body)" '"code":"METHOD_NOT_ALLOWED"'
 
 # 10 429: /health/deep 은 분당 10회(burst 3)
 got=000
@@ -104,7 +96,6 @@ done
 expect "429 가 나옴(분당 10회 제한)" 429 "$got"
 if [[ $got == 429 ]]; then
   expect "429: Access-Control-Allow-Origin" "*" "$(hval access-control-allow-origin)"
-  expect_has "429: 본문 code" "$(body)" '"code":"RATE_LIMITED"'
 fi
 
 rm -rf "$T"
