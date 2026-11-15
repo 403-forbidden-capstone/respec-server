@@ -62,6 +62,12 @@ def may_use_ml(
     return any(_UUID_PATTERN.match(s) and s.lower() == user_id.lower() for s in items)
 
 
+def allowed_user_id_count(allowed_user_ids: str | None) -> int:
+    """허용 목록의 서로 다른 UUID 수 — /health/deep에 숫자만 보임(계정 id는 안 보임). may_use_ml과 같은 쪼개기 · UUID 모양 검사"""
+    items = (js_trim(s) for s in (allowed_user_ids or "").split(","))
+    return len({s.lower() for s in items if _UUID_PATTERN.match(s)})
+
+
 # A trusted Edge-service read is still not enough without a versioned codebook
 # and recorded consent. Client-writable public.profiles fields are never accepted.
 class VerifiedMlProfile(MlProfile, total=False):

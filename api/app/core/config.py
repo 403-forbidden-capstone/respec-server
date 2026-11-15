@@ -27,13 +27,12 @@ class Settings(BaseSettings):
     # 앱은 읽기 함수의 이 오류를 Edge로 한 번 더 보내므로 키를 서버에 넣기 전에 켜도 안전함 (본 레포 M2)
     kakao_rest_api_key: SecretStr | None = None
 
-    # 준비시간 예측 서버(CatBoost, 실험) — 원본 Edge의 PREPARE_ML_* 비밀값. 서버 설정 표(2-3)로 옮기기 전까지 env로.
-    # 켜는 조건 6가지(플래그 "1" · UUID 허용 목록 · URL · 토큰 · 코드북 버전 · 검증된 프로필)가 다 맞아야 호출 — 기본은 전부 꺼짐
-    prepare_ml_enabled: str | None = None
-    prepare_ml_allowed_user_ids: str | None = None
+    # 준비시간 예측 서버(CatBoost, 실험) 주소 · 토큰 — 원본 Edge의 PREPARE_ML_URL · PREPARE_ML_API_TOKEN 비밀값이라 env 그대로.
+    # 켜는 조건 3개(켜짐 · 허용 계정 · 코드북 판)는 env가 아니라 서버 설정 표(public.server_settings, 본 레포 #525)에서 읽음 —
+    # shared/server_settings.py. 서버 api.env에 옛 PREPARE_ML_ENABLED 등이 남아 있어도 무시됨(extra="ignore")
+    # 켜는 조건 6가지(켜짐 · UUID 허용 목록 · 코드북 판 = 표 / URL · 토큰 = env / 검증된 프로필 = 서버 전용 표)가 다 맞아야 호출 — 기본은 전부 꺼짐
     prepare_ml_url: str | None = None
     prepare_ml_api_token: SecretStr | None = None
-    prepare_ml_codebook_version: str | None = None
 
     jwt_audience: str = "authenticated"
     jwt_leeway_seconds: int = 10  # 서버 · Supabase 시계 어긋남 허용

@@ -17,6 +17,7 @@ from jwt.algorithms import ECAlgorithm
 
 from app.core.config import Settings
 from app.main import create_app
+from app.shared import server_settings
 
 SUPABASE_URL = "http://supabase.test"
 ISSUER = f"{SUPABASE_URL}/auth/v1"
@@ -68,6 +69,11 @@ class FakeSupabase:
     jwks_keys: list[dict] | None = None  # None이면 signer 하나
     jwks_body: object | None = None  # 값이 있으면 {"keys": ...} 대신 이 본문을 그대로 돌려줌 (깨진 응답 흉내)
     heartbeat: list[dict] = field(default_factory=lambda: [{"alive_at": None}])
+    # 서버 설정 표(public.server_settings) 줄. None이면 표가 없는 것처럼 404(읽기 실패), settings_down이면 500
+    settings_rows: list[dict] | None = None
+    settings_body: object | None = None  # 값이 있으면 줄 목록 대신 이 본문을 그대로(깨진 응답 흉내)
+    settings_down: bool = False
+    settings_requests: list[httpx.Request] = field(default_factory=list)
     rest_down: bool = False
     jwks_calls: int = 0
     rest_requests: list[httpx.Request] = field(default_factory=list)
@@ -93,6 +99,15 @@ class FakeSupabase:
             if self.rest_down:
                 return httpx.Response(500, json={"message": "boom"})
             return httpx.Response(200, json=self.heartbeat)
+        if request.url.path.endswith("/rest/v1/server_settings"):
+            self.settings_requests.append(request)
+            if self.settings_down:
+                return httpx.Response(500, json={"message": "boom", "code": "XX000"})
+            if self.settings_body is not None:
+                return httpx.Response(200, json=self.settings_body)
+            if self.settings_rows is None:
+                return httpx.Response(404, json={"message": "no table", "code": "PGRST205"})
+            return httpx.Response(200, json=self.settings_rows)
         return httpx.Response(404)
 
 
@@ -104,6 +119,12 @@ def make_settings(**overrides) -> Settings:
         "health_deep_cache_seconds": 0,  # 기존 시험은 매번 새로 확인. 캐시 시험은 test_deploy_contract.py
     }
     return Settings(**{**base, **overrides})
+
+
+@pytest.fixture(autouse=True)
+def _fresh_server_settings_cache() -> None:
+    """서버 설정 표 캐시는 프로세스 전역이라 시험끼리 값이 새지 않게 매번 비움"""
+    server_settings.reset_cache()
 
 
 @pytest.fixture(autouse=True)
