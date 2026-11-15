@@ -55,20 +55,21 @@ def idempotency_key_of(request: Request) -> str | None:
     return value if value is not None and _KEY_PATTERN.fullmatch(value) else None
 
 
-def request_hash_of(body: bytes) -> str:
-    """요청 본문을 json.loads → 키 정렬 · 공백 없는 JSON 글자 → sha256 hex (같은 키로 다른 내용을 보냈는지 DB 함수가 비교)"""
-    text = json.dumps(json.loads(body), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def request_hash_of(value: Any) -> str:
+    """read_json이 읽은 요청 값 → 키 정렬 · 공백 없는 JSON 글자 → sha256 hex (같은 키로 다른 내용을 보냈는지 DB 함수가 비교).
+    본문을 다시 파싱하지 않음 — read_json이 받아 준 본문(깨진 UTF-8 · 짝 없는 반쪽 글자 포함)이 키를 붙였다고 500이 되지 않게"""
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).hexdigest()
 
 
 @router.post("/fn/alarm-commit")
 async def alarm_commit(request: Request, user: CurrentUser) -> dict[str, Any]:
-    body = await request.body()
-    root = Reader.root(read_json(body))
+    raw = read_json(await request.body())
+    root = Reader.root(raw)
     parsed = read_commit_request(root)
     root.finish()
     key = idempotency_key_of(request)
-    request_hash = request_hash_of(body) if key else None
+    request_hash = request_hash_of(raw) if key else None
 
     user_db = create_user_client(bearer_of(request))
     ctx = CommitCtx(user_id=user.user_id, user_db=user_db, service=create_service_client(), now=_now())

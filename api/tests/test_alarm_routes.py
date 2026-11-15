@@ -348,3 +348,18 @@ def test_standalone_with_a_key_is_saved_once(api):
     assert second.json() == first.json()
     assert len(api.db.rows("alarms")) == 1
     assert last_rpc(api)["p_mode"] == "STANDALONE"
+
+
+@pytest.mark.parametrize(
+    "odd",
+    [b"\xff", rb"\ud800"],  # 깨진 UTF-8 바이트 · 짝 없는 반쪽 글자(JSON 이스케이프)
+    ids=["invalid-utf8", "lone-surrogate"],
+)
+def test_a_key_does_not_turn_an_odd_body_into_a_500(api, odd):
+    """키를 붙여도 본문을 다시 파싱하지 않음 — 키 없을 때와 같은 결과(500 아님)"""
+    body = json.dumps({**FULL, "appointment": {**FULL["appointment"], "title": "@@"}}).encode()
+    raw = body.replace(b"@@", b"x" + odd)
+    without = api.post(COMMIT, raw=raw)
+    with_key = api.post(COMMIT, raw=raw, headers={"Idempotency-Key": f"odd-key-{len(odd):04d}"})
+    assert without.status_code != 500, without.text
+    assert with_key.status_code == without.status_code, with_key.text
