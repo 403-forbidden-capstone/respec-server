@@ -15,7 +15,8 @@ log = logging.getLogger("respec.db")
 
 def db_fail(context: str, error: Mapping[str, Any]) -> NoReturn:
     code = error.get("code")
-    log.error("[db] %s: %s %s %s", context, code or "", error.get("message"), error.get("details") or "")
+    # details에는 값(예: 중복 키의 토큰)이 들어갈 수 있어 서버 로그엔 안 남김 — 코드 · 문구만 (Edge는 details까지 찍었음)
+    log.error("[db] %s: %s %s", context, code or "", error.get("message"))
     if code == "42501":
         raise AppError("FORBIDDEN", "이 작업을 할 권한이 없어요")
     if code == "23505":

@@ -29,7 +29,9 @@ def test_db_fail_maps_code(code, error_code, message):
 def test_db_fail_logs_code_message_only(caplog):
     with caplog.at_level(logging.ERROR, logger="respec.db"), pytest.raises(AppError):
         db_fail("todos", {"message": "boom", "code": "23505", "details": "Key (a)=(1) exists"})
-    assert "[db] todos: 23505 boom Key (a)=(1) exists" in caplog.text
+    assert "[db] todos: 23505 boom" in caplog.text
+    # details에는 값(중복 키의 토큰 등)이 들어갈 수 있어 서버 로그엔 안 남김 (PR #10 리뷰)
+    assert "Key (a)=(1)" not in caplog.text
 
 
 def test_must_returns_data_or_raises():

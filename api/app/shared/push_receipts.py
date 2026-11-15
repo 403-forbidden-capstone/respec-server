@@ -79,9 +79,8 @@ async def run_receipt_check(
                 if not prev or ms(parse_iso(r["created_at"])) > ms(parse_iso(prev)):
                     gone[r["token"]] = r["created_at"]
             else:
-                log.error(
-                    "[wake-check] 푸시 영수증 오류 %s %s", error or "unknown", receipt.get("message") or ""
-                )
+                # Edge는 receipt.message도 찍었지만, Expo 문구에 푸시 토큰이 들어갈 수 있어 서버 로그엔 오류 코드만 (로그 규칙)
+                log.error("[wake-check] 푸시 영수증 오류 %s", error or "unknown")
         expired = [
             r
             for r in rows
@@ -110,5 +109,5 @@ async def run_receipt_check(
             "expired": len(expired),
         }
     except Exception as e:  # noqa: BLE001 — 영수증 확인은 같은 배치의 MISSED 기록을 막지 않음
-        log.error("[wake-check] 영수증 확인 실패 %s", str(e))
+        log.error("[wake-check] 영수증 확인 실패 %s", getattr(e, "code", None) or type(e).__name__)
         return nothing

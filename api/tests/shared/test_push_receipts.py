@@ -174,17 +174,24 @@ def test_영수증이_늦게_오는_사이_같은_토큰이_다시_등록됐으�
 
 
 def test_devicenotregistered가_아닌_영수증_오류는_서버_로그에_남김(caplog):
-    """DeviceNotRegistered가 아닌 영수증 오류는 서버 로그에 남김 (토큰은 그대로)"""
+    """DeviceNotRegistered가 아닌 영수증 오류는 서버 로그에 남김 (토큰은 그대로). Expo 문구(message)엔 토큰이 들어갈 수 있어 코드만 남김(PR #10 리뷰)"""
     db = setup()
     db.rows("push_tickets").append(ticket("t-c", B, TC, "WAKE_PING", ago(RECEIPT_DELAY_MS + 1000)))
     fetch = receipts_of(
-        {"t-c": {"status": "error", "message": "too big", "details": {"error": "MessageTooBig"}}}
+        {
+            "t-c": {
+                "status": "error",
+                "message": '"ExponentPushToken[secret]" too big',
+                "details": {"error": "MessageTooBig"},
+            }
+        }
     )
     with caplog.at_level(logging.ERROR):
         run(run_receipt_check(db, NOW, fetch_impl=fetch))
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1
     assert "MessageTooBig" in errors[0].getMessage()
+    assert "ExponentPushToken" not in caplog.text
     assert len(db.rows("push_tokens")) == 3
 
 

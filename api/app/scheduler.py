@@ -206,8 +206,12 @@ def main() -> int:
                 log.error("scheduler tick 예외: %s", type(exc).__name__)
             stop.wait(1.0)
     finally:
-        runtime.close()
-        db.close()
+        try:
+            runtime.close()  # httpx 클라이언트 닫기가 실패해도 아래 DB 닫기 · 종료 로그는 남김
+        except Exception as exc:  # noqa: BLE001
+            log.error("scheduler 종료 중 runtime.close 실패: %s", type(exc).__name__)
+        finally:
+            db.close()
     log.info("scheduler 종료 신호 받음")
     log.info("scheduler 종료")
     return 0
