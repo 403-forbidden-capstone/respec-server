@@ -17,7 +17,8 @@ from .core.config import Settings
 from .core.errors import AppError, code_for_status, error_body
 from .core.http import EdgeCompatMiddleware, EdgeJSONResponse, error_response
 from .core.jwks import JwksCache
-from .routers import health, me, places
+from .routers import alarm_commit, alarm_roll, alarm_suggest, appointment_edit, health, me, places
+from .shared import supabase as shared_supabase
 
 
 def create_app(
@@ -33,6 +34,9 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client = httpx.AsyncClient(timeout=settings.http_timeout_seconds, transport=transport)
         app.state.http = client
+        shared_supabase.configure(
+            settings, client
+        )  # shared Db(PostgREST)가 같은 설정 · 같은 httpx 클라이언트를 씀 (W0)
         app.state.deep_lock = asyncio.Lock()
         app.state.deep_cache = None  # (시각, 본문, 상태) — /health/deep 짧은 캐시
         app.state.jwks = JwksCache(
@@ -44,6 +48,7 @@ def create_app(
         try:
             yield
         finally:
+            shared_supabase.configure(None, None)
             await client.aclose()
 
     # /docs · /redoc · /openapi.json은 끔 (5장 규약) → 404가 Edge 모양으로 나감
@@ -85,5 +90,9 @@ def create_app(
     app.include_router(health.router)
     app.include_router(me.router)
     app.include_router(places.router)
+    app.include_router(alarm_suggest.router)
+    app.include_router(alarm_commit.router)
+    app.include_router(alarm_roll.router)
+    app.include_router(appointment_edit.router)
     app.add_middleware(EdgeCompatMiddleware)  # 맨 바깥 (마지막에 더한 것이 가장 바깥)
     return app

@@ -9,6 +9,7 @@ dependencies = [
     "pydantic-settings",
     "httpx",
     "pyjwt[crypto]",
+    "tzdata",
 ]
 
 [dependency-groups]
