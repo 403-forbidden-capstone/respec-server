@@ -15,6 +15,7 @@ import httpx
 from fastapi import APIRouter, Request
 
 from ..core.http import EdgeJSONResponse
+from ..core.supabase import rest_headers, rest_url
 
 router = APIRouter()
 log = logging.getLogger("respec.health")
@@ -40,17 +41,11 @@ async def _read_heartbeat(request: Request) -> list[dict] | None:
     settings = request.app.state.settings
     if settings.supabase_secret_key is None:
         return None
-    secret = settings.supabase_secret_key.get_secret_value()
-    headers = {"apikey": secret}
-    # 옛 service_role JWT 키는 Authorization에도 싣고, 새 sb_secret_ 키는 apikey만
-    if secret.startswith("eyJ"):
-        headers["Authorization"] = f"Bearer {secret}"
-    url = f"{settings.supabase_url.rstrip('/')}/rest/v1/server_heartbeat"
     try:
         resp = await request.app.state.http.get(
-            url,
+            rest_url(settings.supabase_url, "server_heartbeat"),
             params={"select": "alive_at", "order": "alive_at.desc.nullslast", "limit": "1"},
-            headers=headers,
+            headers=rest_headers(settings.supabase_secret_key.get_secret_value()),
         )
         resp.raise_for_status()
         rows = resp.json()

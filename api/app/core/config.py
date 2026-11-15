@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     jwks_min_refetch_seconds: int = 10
     http_timeout_seconds: float = 3.0
 
-    # 스케줄러(S3) 구현 전에는 끔 — 켜면 /health/deep이 server_heartbeat.alive_at 정체(기본 15분)를 실패로 봄
+    # 스케줄러(S3)가 배포돼 alive_at이 올라오는 것을 확인한 뒤에 켬 — 켜면 /health/deep이 server_heartbeat.alive_at 정체(기본 15분)를 실패로 봄
     health_require_scheduler: bool = False
     scheduler_stale_minutes: int = 15
 

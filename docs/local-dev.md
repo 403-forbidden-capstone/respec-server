@@ -8,7 +8,7 @@
 | 이름 | 어디서 | 호스트 포트 | 비고 |
 |---|---|---|---|
 | 서버(api) | `uv`로 직접, 또는 `compose.local.yml`(운영과 같은 이미지) | 28000 | 둘 중 하나만 (같은 포트) |
-| scheduler | `compose.local.yml` | 없음 | 자리표시자(S3 전까지 아무 일 안 함) |
+| scheduler | `compose.local.yml` | 없음 | 하트비트 · 스위치 표 읽기. 로컬 표는 전부 `edge`라 하트비트만 씀 (`api/README.md` "스케줄러") |
 | 로컬 Supabase (DB · 로그인 · API 게이트웨이 · 실시간 · 스토리지) | Docker, 이 레포의 `dev/stack-config.toml` | API 28321 · DB 28322 | 본 레포 스택과 별개 |
 | Edge 함수 | `supabase functions serve` | 28321(`/functions/v1/…`) | 본 레포 `supabase/functions` 복사본 |
 
