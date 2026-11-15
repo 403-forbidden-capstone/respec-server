@@ -121,14 +121,20 @@ Edge `place-search` · `place-reverse`의 서버판 — 앱이 `callEdge()`로 �
 | 시간 초과(4초) · 5xx · 연결 실패 · 깨진 응답 · 그 밖의 상태 | 502 `PLACE_UNAVAILABLE` |
 
 - 검색: 정확도순으로 부르고 기준 좌표(x = 경도, y = 위도)는 치우침으로만 씀. 같은 이름의 여러 지점(스타벅스)은 기준 좌표에서 가까운 순. 검색어가 "…역"으로 끝나면 지하철역(SW8)을 따로 찾아 맨 위에 두고(겹치는 곳은 한 번), 이 보조 호출이 실패해도 본 검색은 계속함
-- **JS와 맞춘 곳** (같은 입력이 같은 결과가 되도록 `core/read.py` · `kakao_parse.py`): 글자 수는 UTF-16 단위(이모지 하나 = 2) · trim은 JS가 지우는 글자 · `true`는 숫자가 아님 · `NaN` · `Infinity`는 JSON이 아님 · `5.0`은 정수 · `1e400`은 숫자가 아님 · 카카오 좌표 글자 `""`는 0 · `37.0`은 `37`로 내보냄
+- **JS와 맞춘 곳** (같은 입력이 같은 결과가 되도록 `core/read.py` · `kakao_parse.py`): 글자 수는 UTF-16 단위(이모지 하나 = 2) · trim은 JS가 지우는 글자 · `true`는 숫자가 아님 · `NaN` · `Infinity`는 JSON이 아님 · `5.0`은 정수 · `1e400`은 숫자가 아님 · 본문 맨 앞 UTF-8 BOM은 지움(Fetch `req.text()`와 같음) · 짝 없는 서로게이트(`\ud800`)는 검색어에서 U+FFFD로 바뀌고 응답에는 `\udXXX`로 나감 · 카카오 키 앞뒤 공백은 JS trim으로 지움 · 카카오 좌표 글자 `""`는 0 · 카카오로 보내는 좌표 글자와 응답 좌표는 JS 숫자 형식(`37.0` → `37`, `1e-7`) · "…역" 판정의 공백도 JS 기준
 - 키 · 좌표 · 검색어는 로그 · 오류 본문에 안 남김(위 "로그에 안 남기는 것"). 응답은 저장하지 않음(카카오 약관)
 - **계약 시험**: `tests/test_kakao_parse.py`는 Edge `_shared/kakao-parse.test.ts`의 샘플 · 기대값을 그대로 옮긴 것이라 서버판이 같은 값을 내면 같은 응답이 나감. `tests/test_read.py` · `tests/test_places.py`는 입력 검사 문구 · 순서 · 오류 번역표를 HTTP 수준에서 대조함. **Edge의 기대값이 바뀌면 이 시험도 같이 바꿀 것**
-- **재생 스크립트** `dev/replay_places.py`: 같은 입력 20건(검색 · 주소 · 잘못된 입력)을 Edge · 서버에 번갈아 보내 응답(상태 + JSON)이 같은지, 같은 입력으로 잰 p95가 서버 ≤ Edge인지 확인하고 요청이 30건 이상인지 셈(`--rounds 2` = 양쪽 40건). 환경 변수 `REPLAY_SUPABASE_URL` · `REPLAY_ANON_KEY` · `REPLAY_EMAIL` · `REPLAY_PASSWORD`(점검용 시험 계정) · `REPLAY_SERVER_URL`로만 받고 화면 · 파일에 안 찍음:
+- **재생 스크립트** `dev/replay_places.py`: 고정 입력 20건(검색 10 · 주소 7 · 잘못된 입력 3)을 `--rounds`번(기본 3 = 양쪽 60건) Edge · 서버에 번갈아 보냄. 아래가 전부 맞아야 통과(종료 코드 0), 아니면 1:
+  - 요청이 양쪽 30건 이상 (첫 바퀴는 Edge 콜드 스타트를 빼려고 데우기로 버리고 셈에 안 넣음, `--no-warmup`으로 끔)
+  - 케이스마다 양쪽이 **기대한 상태**로 답함 — 정상 입력 200 · 잘못된 입력 400. 양쪽이 똑같이 502(키 만료 · 한도 초과)여도 "같은 오류"로 통과하지 않음. 서버 5xx는 한 번이라도 있으면 실패
+  - 같은 입력의 응답(상태 + JSON)이 Edge · 서버에서 같음. 어긋나면 케이스 이름과 양쪽 상태 번호를 찍음
+  - 같은 입력으로 잰 p95가 서버 ≤ Edge. 클라이언트에서 연결을 매번 새로 맺어 재므로 서버 처리 시간 자체가 아니라 연결 포함 값임(클라이언트 → EC2와 클라이언트 → Supabase 경로도 다름)
+
+  canary 24시간 · 서버 5xx 0(nginx 로그) · Edge 자동 대체 0(앱 로그)은 이 스크립트가 재지 않음. 환경 변수 `REPLAY_SUPABASE_URL` · `REPLAY_ANON_KEY` · `REPLAY_EMAIL` · `REPLAY_PASSWORD`(점검용 시험 계정) · `REPLAY_SERVER_URL`로만 받고 화면 · 파일에 안 찍음:
   ```bash
-  python dev/replay_places.py --rounds 2 --warmup
+  python dev/replay_places.py
   ```
-- **서버 로그 확인 (끝 칸 1-12 ④)**: 재생 뒤 서버 로그에 토큰 · 좌표 · 검색어가 0건이어야 함 — `docker compose logs api | grep -E "Bearer|eyJ|KakaoAK|세종대|강남역|37\.5509|127\.0736"` 결과가 비어 있어야 함
+- **서버 로그 확인 (끝 칸 1-12 ④)**: 재생 뒤 서버 로그에 토큰 · 좌표 · 검색어가 0건이어야 함. 패턴은 재생 입력 목록에서 만든 것을 씀(입력이 바뀌어도 어긋나지 않게) — 환경 변수 없이 `python dev/replay_places.py --print-grep`으로 찍어, `docker compose logs api | grep -E "<찍힌 패턴>"` 결과가 비어 있어야 함
 - 켜는 순서: ① 서버 env에 `KAKAO_REST_API_KEY` 반영 ② 재생 스크립트 통과 ③ 표에서 `place-search` · `place-reverse`를 `canary`(시험 계정만, `server_route_users`)로 — 본 레포 `supabase/README.md` "서버 전환 스위치" ④ 24시간 동안 요청 30건 이상 · 서버 5xx 0 · Edge 자동 대체 0 확인 ⑤ 안 되면 `edge`로 한 줄(`update server_routes set mode = 'edge' where kind = 'function' and name = '…'`). 끝나도 값은 `canary`로 둠(전체 전환은 2-6과 같이)
 
 ## 컨테이너 (`Dockerfile`)

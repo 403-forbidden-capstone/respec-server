@@ -14,16 +14,40 @@ from .errors import AppError
 MAX_BODY_CHARS = 100_000  # UTF-16 글자 수 (Edge 기본값)
 
 # JS String.prototype.trim이 지우는 글자: WhiteSpace(탭 · 수직탭 · 폼피드 · 스페이스 · NBSP · BOM · 유니코드 공백) + LineTerminator
-_JS_WHITESPACE = "\t\n\v\f\r                  　﻿"
+JS_WHITESPACE = "".join(
+    chr(c)
+    for c in (
+        0x09,
+        0x0A,
+        0x0B,
+        0x0C,
+        0x0D,
+        0x20,
+        0xA0,
+        0x1680,
+        *range(0x2000, 0x200B),
+        0x2028,
+        0x2029,
+        0x202F,
+        0x205F,
+        0x3000,
+        0xFEFF,
+    )
+)
 
 
 def js_trim(value: str) -> str:
-    return value.strip(_JS_WHITESPACE)
+    return value.strip(JS_WHITESPACE)
 
 
 def js_length(value: str) -> int:
     """JS `string.length` — UTF-16 코드 단위 수 (BMP 밖 글자 · 이모지는 2)"""
     return len(value.encode("utf-16-le", errors="surrogatepass")) // 2
+
+
+def clean_text(value: str) -> str:
+    """짝 없는 서로게이트(`"\\ud800"` · 이모지 반쪽)를 U+FFFD로 — JS `URLSearchParams`가 하는 일. 안 바꾸면 UTF-8로 못 만들어 500"""
+    return value.encode("utf-16-le", errors="surrogatepass").decode("utf-16-le", errors="replace")
 
 
 def _reject_constant(name: str) -> Any:
@@ -32,7 +56,8 @@ def _reject_constant(name: str) -> Any:
 
 def read_json(raw: bytes, max_chars: int = MAX_BODY_CHARS) -> Any:
     """Edge `readJson`: 너무 큼 · 비어 있음 · JSON 아님을 같은 문구의 VALIDATION_FAILED로"""
-    text = raw.decode("utf-8", errors="replace")
+    # Fetch 표준의 `req.text()`는 본문 맨 앞 UTF-8 BOM을 지움 — utf-8-sig가 같은 일을 함 (본문 중간의 BOM은 그대로 두어 JSON 오류)
+    text = raw.decode("utf-8-sig", errors="replace")
     if js_length(text) > max_chars:
         raise AppError("VALIDATION_FAILED", "요청이 너무 커요")
     if not js_trim(text):

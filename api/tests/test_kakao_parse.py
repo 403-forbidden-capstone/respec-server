@@ -5,7 +5,6 @@ Edge가 이 기대값을 내므로 서버판이 같은 값을 내면 같은 응�
 """
 
 import asyncio
-import json
 
 import httpx
 import pytest
@@ -212,6 +211,94 @@ def test_asks_for_station_rule():
     assert not asks_for_station("역") and not asks_for_station("역삼동") and not asks_for_station("")
 
 
+def test_js_number_str_follows_number_prototype_to_string_for_small_and_large_values():
+    cases = {
+        0.00005: "0.00005",  # JS는 1e-6 미만에서만 지수 표기 (파이썬 repr은 1e-4 미만부터 → '5e-05')
+        -0.00005: "-0.00005",
+        0.000001: "0.000001",
+        1e-7: "1e-7",
+        1.5e-7: "1.5e-7",
+        -1.2345e-7: "-1.2345e-7",
+        123456.789: "123456.789",
+        1e21: "1e+21",
+        1.5e21: "1.5e+21",
+        123456789012345680000.0: "123456789012345680000",
+        0.5: "0.5",
+        100.0: "100",
+        -0.0: "0",
+        5e-324: "5e-324",
+    }
+    for value, expected in cases.items():
+        assert js_number_str(value) == expected, value
+
+
+def test_asks_for_station_uses_js_whitespace_not_python_whitespace():
+    # JS \S는 \x1c~\x1f · \x85를 공백이 아닌 글자로 보고 U+FEFF를 공백으로 봄 (파이썬 \S는 반대)
+    for ch in (chr(0x85), chr(0x1C), chr(0x1F)):
+        assert asks_for_station("x" + ch + "역"), hex(ord(ch))
+    assert not asks_for_station("x" + chr(0xFEFF) + "역")
+    assert not asks_for_station("x" + chr(0x3000) + "역") and not asks_for_station("x" + chr(0xA0) + "역")
+
+
+def test_station_helper_gets_the_same_bias_coordinates_as_the_main_call():
+    calls: list[httpx.Request] = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"documents": []})
+
+    run_search(handler, query="강남역", near={"lat": 37.5, "lng": 127})
+    assert len(calls) == 2
+    for call in calls:
+        assert (
+            call.url.params["x"] == "127"
+            and call.url.params["y"] == "37.5"
+            and call.url.params["sort"] == "accuracy"
+        )
+
+
+def test_station_helper_swallows_any_exception_not_only_kakao_errors():
+    def handler(request):
+        if request.url.params.get("category_group_code") == "SW8":
+            raise RuntimeError("boom")  # Edge `.catch(() => null)`는 모든 실패를 삼킴
+        return httpx.Response(200, json={"documents": [doc("A", "시청역", 126.97, 37.56)]})
+
+    assert [p["id"] for p in run_search(handler, query="시청역")] == ["A"]
+
+
+def test_main_and_station_calls_run_concurrently():
+    """순차로 바꾸면 p95(완결점 1-12 ③)에 직접 영향 — 본 호출이 보조 호출이 시작될 때까지 기다리게 해서 순차면 시간 초과로 실패"""
+    started = {"station": asyncio.Event()}
+
+    async def handler(request):
+        if request.url.params.get("category_group_code") == "SW8":
+            started["station"].set()
+            return httpx.Response(200, json={"documents": []})
+        await asyncio.wait_for(started["station"].wait(), timeout=2)  # 보조 호출이 동시에 시작돼야 풀림
+        return httpx.Response(200, json={"documents": [doc("A", "시청역", 126.97, 37.56)]})
+
+    assert [p["id"] for p in run_search(handler, query="시청역")] == ["A"]
+
+
+def test_same_name_branches_are_ranked_through_the_whole_search_path():
+    near = {"lat": 37.5547, "lng": 126.9707}
+    documents = [
+        doc("far", "스타벅스", 127.0276, 37.4979),
+        doc("x", "스타벅스 리저브", 127.1, 37.6),
+        doc("near", "스타벅스", 126.971, 37.555),
+    ]
+    assert [p["id"] for p in run_search(ok({"documents": documents}), query="스타벅스", near=near)] == [
+        "near",
+        "x",
+        "far",
+    ]
+    assert [p["id"] for p in run_search(ok({"documents": documents}), query="스타벅스")] == [
+        "far",
+        "x",
+        "near",
+    ]  # 기준 좌표 없음
+
+
 def test_search_keeps_accuracy_order_and_university_comes_first():
     documents = [
         doc("U", "세종대학교", 127.07, 37.55, "교육,학문 > 대학교"),
@@ -364,7 +451,3 @@ def test_the_kakao_call_has_a_4_second_timeout():
 
     run_reverse(handler, lat=1, lng=1)
     assert seen[0]["read"] == 4.0 and seen[0]["connect"] == 4.0  # 설계 7.1.2 "타임아웃 4초"
-
-
-def test_json_helpers_roundtrip_is_plain():
-    assert json.dumps(parse_places({"documents": []})) == "[]"

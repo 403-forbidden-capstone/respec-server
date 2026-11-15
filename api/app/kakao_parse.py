@@ -7,9 +7,10 @@ JS와 같게 맞춘 곳: 숫자 문자열 읽기(빈 글자 = 0, 앞뒤 공백 �
 
 import math
 import re
+from decimal import Decimal
 from typing import Any
 
-from .core.read import js_trim
+from .core.read import JS_WHITESPACE, js_trim
 
 Place = dict[str, Any]  # {id, name, address, lat, lng, category?} — 키 순서까지 Edge와 같음
 
@@ -55,17 +56,37 @@ def text_of(value: Any) -> str:
 
 
 def js_number_str(value: int | float) -> str:
-    """JS `String(n)` — 카카오에 보내는 좌표 글자 (127 → '127', 37.5 → '37.5')"""
-    if isinstance(value, float):
-        if value.is_integer() and abs(value) < 1e21:
-            return str(int(value))
-        return repr(value).replace("e-0", "e-").replace("e+0", "e+")
-    return str(value)
+    """JS `String(n)`(Number::toString) — 카카오에 보내는 좌표 글자. 127 → '127', 37.5 → '37.5', 0.00005 → '0.00005', 1e-7 → '1e-7'.
+    가장 짧게 왕복되는 자릿수(파이썬 repr과 같음)를 JS 규칙으로 놓음: 지수 표기는 1e-6 미만 · 1e21 이상에서만 (파이썬은 1e-4 미만부터)"""
+    if isinstance(value, int):
+        return str(value)
+    if value == 0:
+        return "0"
+    sign = "-" if value < 0 else ""
+    parts = Decimal(repr(abs(value))).as_tuple()
+    digits = "".join(map(str, parts.digits))
+    exponent = int(parts.exponent)
+    stripped = digits.rstrip("0")
+    exponent += len(digits) - len(stripped)
+    k, n = len(stripped), len(stripped) + exponent  # 자릿수 k, 소수점 위치 n (값 = 0.자릿수 × 10^n)
+    if k <= n <= 21:
+        return sign + stripped + "0" * (n - k)
+    if 0 < n <= 21:
+        return sign + stripped[:n] + "." + stripped[n:]
+    if -6 < n <= 0:
+        return sign + "0." + "0" * -n + stripped
+    e = n - 1
+    mantissa = stripped if k == 1 else stripped[0] + "." + stripped[1:]
+    return f"{sign}{mantissa}e{'+' if e >= 0 else '-'}{abs(e)}"
+
+
+# JS `/\S역$/`의 \S — JS 공백이 아닌 글자 (파이썬 \S는 \x1c~\x1f · \x85를 공백으로 보고 U+FEFF는 공백으로 안 봐서 따로 만듦)
+_STATION_QUERY = re.compile(r"[^" + re.escape(JS_WHITESPACE) + r"]역\Z")
 
 
 def asks_for_station(query: str) -> bool:
     """검색어가 "…역"으로 끝나면 지하철역을 찾는 것으로 봄 ("강남역", "서울 시청역"). 한 글자 "역"은 제외"""
-    return re.search(r"\S역\Z", js_trim(query)) is not None
+    return _STATION_QUERY.search(js_trim(query)) is not None
 
 
 def _meters_between(a: dict[str, float], b: Place) -> float:

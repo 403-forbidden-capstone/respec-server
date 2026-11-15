@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app.core.errors import AppError
-from app.core.read import Reader, js_length, js_trim, read_json
+from app.core.read import Reader, clean_text, js_length, js_trim, read_json
 
 
 def body(obj) -> bytes:
@@ -22,16 +22,34 @@ def fails(raw: bytes) -> str:
 def test_read_json_failure_messages():
     assert fails(b"") == "요청 본문(JSON)이 비어 있어요"
     assert fails(b"  \n\t ") == "요청 본문(JSON)이 비어 있어요"
-    assert fails("﻿".encode()) == "요청 본문(JSON)이 비어 있어요"  # BOM만 있어도 JS trim이 지움
+    assert fails(chr(0xFEFF).encode()) == "요청 본문(JSON)이 비어 있어요"  # BOM만 있어도 JS trim이 지움
     assert fails(b"{not json") == "요청 본문이 JSON 형식이 아니에요"
     assert fails(b"") != fails(b"{")
     assert read_json(b'{"a":1}') == {"a": 1}
     assert read_json(b"[1]") == [1]  # 배열도 JSON — 객체인지는 Reader.root가 따짐
 
 
-@pytest.mark.parametrize("raw", [b'{"lat": NaN}', b'{"lat": Infinity}', b'{"lat": -Infinity}', "﻿{}".encode()])
+@pytest.mark.parametrize("raw", [b'{"lat": NaN}', b'{"lat": Infinity}', b'{"lat": -Infinity}'])
 def test_python_only_json_extensions_are_rejected_like_js(raw):
     assert fails(raw) == "요청 본문이 JSON 형식이 아니에요"
+
+
+def test_leading_utf8_bom_is_removed_like_fetch_text_but_a_bom_inside_is_not():
+    bom = chr(0xFEFF).encode("utf-8")
+    assert read_json(bom + b'{"a":1}') == {
+        "a": 1
+    }  # Fetch 표준 req.text()는 맨 앞 BOM을 지움 → Edge는 정상 처리
+    assert fails(bom) == "요청 본문(JSON)이 비어 있어요"
+    assert fails(b" " + bom + b"{}") == "요청 본문이 JSON 형식이 아니에요"  # 본문 중간의 BOM은 JSON 문법 오류
+    just = bom + b'{"query":"' + b"a" * (100_000 - 12) + b'"}'  # BOM은 글자 수에 안 셈
+    read_json(just)
+
+
+def test_clean_text_replaces_lone_surrogates_with_fffd_and_keeps_pairs():
+    lone_high, lone_low, pair = chr(0xD83D), chr(0xDC00), chr(0xD83D) + chr(0xDE00)
+    assert clean_text("a" + lone_high) == "a" + chr(0xFFFD)
+    assert clean_text(lone_low + "b") == chr(0xFFFD) + "b"
+    assert clean_text(pair) == chr(0x1F600) and clean_text("😀한글") == "😀한글"  # 정상 글자는 그대로
 
 
 def test_body_size_limit_counts_utf16_units():
@@ -98,7 +116,7 @@ def test_string_length_boundary_is_inclusive():
 
 
 def test_js_trim_and_length_helpers():
-    assert js_trim(" ﻿　 x  ") == "x"
+    assert js_trim(chr(0xA0) + chr(0xFEFF) + chr(0x3000) + " x " + chr(0x2028)) == "x"
     assert js_trim("\x1cx\x1c") == "\x1cx\x1c"  # 파이썬 strip은 지우지만 JS trim은 안 지움
     assert js_length("😀") == 2 and js_length("한글") == 2 and js_length("") == 0
     assert js_length("\ud800") == 1  # 짝 없는 서로게이트도 안 죽음

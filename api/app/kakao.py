@@ -37,7 +37,8 @@ async def _get_json(client: httpx.AsyncClient, url: str, params: dict[str, str],
         )
     except httpx.TimeoutException:
         raise KakaoError("TIMEOUT") from None
-    except (httpx.HTTPError, httpx.InvalidURL):
+    except (httpx.HTTPError, httpx.InvalidURL, UnicodeError):
+        # UnicodeError: 키 · 검색어를 헤더 · URL로 못 만들 때(Edge는 fetch TypeError → 502). 메시지에 값이 있을 수 있어 안 이음(from None)
         raise KakaoError("HTTP") from None
     if response.status_code in (401, 403):
         raise KakaoError("AUTH", response.status_code)
@@ -84,7 +85,7 @@ async def search_places(
     async def station_only() -> Any:
         try:
             return await _get_json(client, LOCAL_KEYWORD_URL, station_params, key)
-        except KakaoError:
+        except Exception:  # noqa: BLE001 — Edge `.catch(() => null)`처럼 보조 호출의 어떤 실패든 삼킴 (본 검색은 계속)
             return None
 
     station = asyncio.ensure_future(station_only())

@@ -14,7 +14,7 @@ from fastapi import APIRouter, Request
 
 from ..core.auth import CurrentUser
 from ..core.errors import AppError
-from ..core.read import Reader, read_json
+from ..core.read import Reader, clean_text, js_trim, read_json
 from ..kakao import KakaoError, reverse_address, search_places
 
 router = APIRouter()
@@ -22,8 +22,8 @@ router = APIRouter()
 
 def _kakao_key(request: Request, not_configured: str) -> str:
     secret = request.app.state.settings.kakao_rest_api_key
-    # 앞뒤 공백 · 줄바꿈이 섞인 키(env 파일을 손으로 고칠 때)는 헤더 오류로 502가 되므로 지우고, 비면 없는 것으로
-    key = secret.get_secret_value().strip() if secret is not None else ""
+    # 앞뒤 공백 · 줄바꿈이 섞인 키(env 파일을 손으로 고칠 때)는 헤더 오류가 되므로 Edge `getEnv`처럼 JS trim으로 지우고, 비면 없는 것으로
+    key = js_trim(secret.get_secret_value()) if secret is not None else ""
     if not key:
         raise AppError("NOT_CONFIGURED", not_configured)
     return key
@@ -54,7 +54,9 @@ async def place_search(request: Request, user: CurrentUser) -> dict[str, Any]:
         places = await search_places(
             request.app.state.http,
             key,
-            query=query or "",
+            query=clean_text(
+                query or ""
+            ),  # 짝 없는 서로게이트는 U+FFFD로 (JS URLSearchParams와 같음, 안 바꾸면 500)
             near={"lat": lat, "lng": lng} if lat is not None and lng is not None else None,
             size=limit or 10,
         )

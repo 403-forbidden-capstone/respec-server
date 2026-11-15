@@ -39,6 +39,9 @@ CORS_HEADERS: dict[str, str] = {
 # `_shared/http.ts` REQUEST_ID_PATTERN과 같음
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 JSON_CONTENT_TYPE = "application/json; charset=utf-8"
+_LONE_SURROGATE = re.compile(
+    "[" + chr(0xD800) + "-" + chr(0xDFFF) + "]"
+)  # 파이썬 str에는 짝 없는 서로게이트가 들어갈 수 있음
 
 
 def request_id_of(sent: str | None) -> str:
@@ -51,7 +54,10 @@ class EdgeJSONResponse(JSONResponse):
     media_type = JSON_CONTENT_TYPE
 
     def render(self, content: object) -> bytes:
-        return json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        text = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+        # JS JSON.stringify는 짝 없는 서로게이트를 \udXXX 이스케이프로 내보냄 — 그대로 두면 UTF-8로 못 만들어 500
+        text = _LONE_SURROGATE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
+        return text.encode("utf-8")
 
 
 def error_response(error: AppError) -> EdgeJSONResponse:

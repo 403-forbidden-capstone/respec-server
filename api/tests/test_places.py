@@ -353,6 +353,81 @@ def test_reverse_kakao_status_translation(api, fake, status, code, http, message
     assert error["message"] == message
 
 
+# ---------- 입력이 아주 특이할 때도 Edge처럼 (검수에서 찾은 어긋남) ----------
+
+
+def test_lone_surrogate_in_the_query_is_replaced_not_a_500(api, fake):
+    """Edge는 URLSearchParams가 U+FFFD로 바꿔 카카오를 부르고 200 — 서버도 500이 아니라 같은 요청을 보내야 함"""
+    for text in (chr(0xD800), "a" + chr(0xD83D)):  # 짝 없는 서로게이트 · 이모지 반쪽
+        raw = json.dumps({"query": text}).encode("utf-8", errors="surrogatepass")
+        res = api.post(SEARCH, raw=raw)
+        assert res.status_code == 200, text
+        assert chr(0xFFFD) in fake.kakao_requests[-1].url.params["query"]
+
+
+def test_lone_surrogate_in_a_kakao_answer_is_escaped_like_json_stringify(api, fake):
+    name = "가게" + chr(0xD800)
+    # httpx의 json=은 짝 없는 서로게이트를 UTF-8로 못 만들어 실패하므로, 카카오가 보낼 법한 \udXXX 이스케이프 JSON을 직접 만듦
+    body = json.dumps({"documents": [kakao_doc("1", name, "127", "37")]}).encode("ascii")
+    fake.kakao = lambda request: httpx.Response(
+        200, content=body, headers={"content-type": "application/json"}
+    )
+    res = api.post(SEARCH, {"query": "가게"})
+    assert res.status_code == 200
+    assert (
+        "\\ud800" in res.text and chr(0xD800) not in res.text
+    )  # JS JSON.stringify와 같이 이스케이프 (그대로면 UTF-8로 못 만들어 500)
+    assert json.loads(res.text)["places"][0]["name"] == name
+
+
+def test_leading_bom_in_the_body_is_accepted_like_edge(api):
+    raw = chr(0xFEFF).encode("utf-8") + b'{"query":"a"}'
+    assert api.post(SEARCH, raw=raw).status_code == 200
+
+
+def test_tiny_coordinates_reach_kakao_in_js_number_format(api, fake):
+    api.post(SEARCH, {"query": "a", "lat": 0.00005, "lng": -0.00005})
+    params = dict(fake.kakao_requests[-1].url.params)
+    assert params["y"] == "0.00005" and params["x"] == "-0.00005"  # 파이썬 repr이면 '5e-05'
+    api.post(REVERSE, {"lat": 0.00005, "lng": 1e-7})
+    assert dict(fake.kakao_requests[-1].url.params) == {"x": "1e-7", "y": "0.00005"}
+
+
+def test_key_with_js_whitespace_is_trimmed_like_getenv_and_a_non_ascii_key_is_502_like_edge(
+    make_client, fake, signer
+):
+    fake.kakao = lambda request: httpx.Response(200, json={"documents": []})
+    bom = chr(0xFEFF)
+    ok_client = make_client(kakao_rest_api_key=KEY + bom)  # JS trim은 U+FEFF를 지움 (파이썬 strip은 안 지움)
+    res = ok_client.post(SEARCH, json={"query": "a"}, headers=bearer(signer.token()))
+    assert res.status_code == 200
+    assert fake.kakao_requests[-1].headers["authorization"] == f"KakaoAK {KEY}"
+    bad_client = make_client(
+        kakao_rest_api_key="한글키"
+    )  # 헤더로 못 만드는 글자 — Edge는 fetch TypeError → 502
+    res = bad_client.post(SEARCH, json={"query": "a"}, headers=bearer(signer.token()))
+    error_of(res, 502, "PLACE_UNAVAILABLE")
+
+
+def test_station_helper_exception_is_swallowed_through_the_whole_stack(api, fake):
+    def kakao(request):
+        if request.url.params.get("category_group_code") == "SW8":
+            raise RuntimeError("boom")
+        return httpx.Response(200, json={"documents": [kakao_doc("A", "시청역", "126.97", "37.56")]})
+
+    fake.kakao = kakao
+    assert [p["id"] for p in api.post(SEARCH, {"query": "시청역"}).json()["places"]] == ["A"]
+
+
+def test_405_message_on_function_routes_is_the_edge_serve_message(make_client, signer):
+    client = make_client(kakao_rest_api_key=KEY)
+    for path in (SEARCH, REVERSE):
+        error = error_of(client.get(path, headers=bearer(signer.token())), 405, "METHOD_NOT_ALLOWED")
+        assert error["message"] == "POST만 받아요"  # Edge serve()의 문구
+    other = error_of(client.post("/me", headers=bearer(signer.token())), 405, "METHOD_NOT_ALLOWED")
+    assert other["message"] == "허용되지 않는 요청이에요"  # 다른 주소는 그대로
+
+
 # ---------- 공통 ----------
 
 
