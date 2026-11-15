@@ -34,7 +34,7 @@ Edge는 도커 안에서 돌아 가짜 서버를 `host.docker.internal:28999`로
 ## 실행
 
 ```bash
-python dev/contract/run.py                          # 전부 (7그룹 · 230경우, 5분쯤)
+python dev/contract/run.py                          # 전부 (8그룹 · 246경우, 6분쯤)
 python dev/contract/run.py --group wake,editpush    # 그룹만
 python dev/contract/run.py --only "토큰 없음"        # 이름에 글자가 든 경우만
 python dev/contract/run.py --out dev/.stack/계약시험.json   # 경우별 요약(응답 · 보낸 푸시)과 다른 곳을 저장 (dev/.stack은 .gitignore 대상)
@@ -49,6 +49,7 @@ python dev/contract/run.py --out dev/.stack/계약시험.json   # 경우별 요�
 | `wake` | wake-check — 본인 미확인 · 친구 '깨워 볼까요?' · 후속 '일어났어요' | 30 |
 | `editpush` | appointment-edit 공동 약속 푸시 — 바뀜 · 취소 · 조용한 푸시 · 확인 필요 | 20 |
 | `suggestgen` | suggestion-generate (후보 · 만든 수 · 건너뛴 수 · 두 번째 실행) | 18 |
+| `keys` | alarm-commit 요청 키(`Idempotency-Key`) — **서버만**(Edge는 키를 무시): 같은 키 · 같은 요청 → 같은 응답 · 행 안 늘어남, 같은 키 · 다른 본문 → 409, 키 길이 · 글자 경계, 사용자별 키, 실패한 요청의 키는 안 남음 | 16 |
 
 출력: `같음` / `다름` + `[Edge 상태/서버 상태 행:표별 행 수 푸시:보낸 수 응답:…]`. 다른 경우는 다른 곳을 `$.body.…` 경로로 최대 12줄 보여 줌.
 
@@ -58,6 +59,7 @@ python dev/contract/run.py --out dev/.stack/계약시험.json   # 경우별 요�
 - 푸시: 가짜 Expo가 받은 메시지(받는 토큰 · 제목 · 본문 · 채널 · 데이터 · 조용한 푸시 여부)를 내용순으로. 호출마다 따로 거둠.
 - 뺀 것: `request_id` · 행 id(새로 생긴 것은 `<새N>`으로 번호 매김) · 만든 · 고친 · 보낸 시각 · 초대 코드. 이 값들은 같은지 못 봄.
 - 예약 작업(wake-check · suggestion-generate)은 서버에 HTTP 길이 없어 `server_job.py`가 스케줄러가 부르는 본문(`app/jobs_server.py`)을 지금 시각으로 한 번 돌리고 Edge 응답과 같은 모양의 JSON을 견줌. Edge는 서비스 키로 HTTP 호출.
+- `keys` 그룹은 Edge와 견주지 않고 서버 응답과 DB 줄 수(약속 · 알람 · `private.request_keys`)가 기대와 맞는지만 확인(`통과` / `실패`). 경우 사이에 `private.request_keys`도 비움
 - `then=[…]`: 같은 상태에서 이어 부름(두 번 돌림 · 그 사이 DB를 바꾸는 `("$sql", None, "SQL")`).
 
 ## 못 덮는 것

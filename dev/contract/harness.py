@@ -221,6 +221,10 @@ def reset(extra_sql: str = "") -> None:
         BASE_PROFILES.format(**ids),
     ]
     parts.append("update public.server_routes set mode = 'edge'; delete from public.server_route_users;")
+    # 요청 키 표(private, 저장 DB 함수 이후 마이그레이션이 만듦)도 비움 — 경우 사이에 키가 남아 다음 경우가 다시 돌려주기로 번지지 않게. 표가 없는 옛 스택은 건너뜀
+    parts.append(
+        "do $$ begin if to_regclass('private.request_keys') is not null then truncate private.request_keys; end if; end $$;"
+    )
     if extra_sql:
         parts.append(extra_sql.format(**ids))
     sql("\n".join(parts))
@@ -280,6 +284,7 @@ def call(
     *,
     service: bool = False,
     method: str = "POST",
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, Any]:
     if side == "server" and fn in JOB_FUNCS:
         return server_job(fn)
@@ -292,7 +297,7 @@ def call(
     else:
         auth = {"Authorization": f"Bearer {env.tokens[user]}", "apikey": env.anon}
     url = (EDGE_BASE if side == "edge" else SERVER_BASE) + fn
-    status, payload, _ = http(method, url, headers=auth, body=body, timeout=90)
+    status, payload, _ = http(method, url, headers={**auth, **(headers or {})}, body=body, timeout=90)
     return status, payload
 
 

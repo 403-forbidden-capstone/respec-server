@@ -46,13 +46,14 @@ def main() -> int:
     ap.add_argument("--only", default="")
     ap.add_argument(
         "--group",
-        default="suggest,commit,roll,edit,wake,editpush,suggestgen",
-        help="suggest,commit,roll,edit(앞 4개) · wake,editpush,suggestgen(푸시 · 예약 작업, 가짜 Expo 필요)",
+        default="suggest,commit,roll,edit,wake,editpush,suggestgen,keys",
+        help="suggest,commit,roll,edit(앞 4개) · wake,editpush,suggestgen(푸시 · 예약 작업, 가짜 Expo 필요) · keys(요청 키, 서버만)",
     )
     ap.add_argument("--out", default="")
     ap.add_argument("--show", action="store_true", help="같은 경우도 응답 상태를 보여 줌")
     args = ap.parse_args()
-    cases = [c for c in load(set(args.group.split(","))) if args.only in c.name]
+    groups = set(args.group.split(","))
+    cases = [c for c in load(groups) if args.only in c.name]
     env = h.setup_env()
     report: list[dict] = []
     same = 0
@@ -125,7 +126,33 @@ def main() -> int:
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(report, fh, ensure_ascii=False, indent=1)
-    return 0
+    key_failed = run_keys(env, args.only) if "keys" in groups else 0
+    return 1 if key_failed else 0
+
+
+def run_keys(env: h.Env, only: str) -> int:
+    """요청 키 경우(서버만) — 호출마다 응답과 DB 줄 수를 거둬 기대와 견줌. 틀린 경우 수를 돌려줌"""
+    import cases_keys as k
+
+    cases = [c for c in k.key_cases() if only in c.name]
+    failed = 0
+    for case in cases:
+        h.reset(case.setup)
+        results = []
+        for step in case.steps:
+            status, body = h.call("server", "alarm-commit", step.user, step.body, env, headers=step.headers)
+            counts = h.sql(
+                "select (select count(*) from public.appointments) || ',' || (select count(*) from public.alarms) || ',' || (select count(*) from private.request_keys)"
+            ).split(",")
+            results.append(k.Result(status, body, int(counts[0]), int(counts[1]), int(counts[2])))
+        problems = case.check(results)
+        summary = " → ".join(f"{r.status}(약속{r.appointments} 알람{r.alarms} 키{r.keys})" for r in results)
+        print(f"{'통과' if not problems else '실패'}  {case.name}  [{summary}]")
+        for problem in problems:
+            print(f"       {problem}")
+        failed += bool(problems)
+    print(f"\n요청 키 {len(cases) - failed}/{len(cases)} 통과 · 실패 {failed}")
+    return failed
 
 
 if __name__ == "__main__":
