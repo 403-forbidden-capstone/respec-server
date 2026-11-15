@@ -12,6 +12,7 @@ manualTimes가 있으면 직접 고른 시각이 자동 계산보다 먼저. 직
 
 from datetime import datetime
 
+from ..js import js_max, js_min
 from .time import add_minutes, same_time
 from .types import AlarmKind, ChainAlarm, ChainInput, RingKind
 
@@ -35,9 +36,9 @@ def alarm_chain(input: ChainInput) -> list[ChainAlarm]:
         return {"kind": kind, "at": auto}
 
     result: list[ChainAlarm] = []
-    advance = max(0, input.get("prepareAdvanceMinutes") or 0)
+    advance = js_max(0, input.get("prepareAdvanceMinutes") or 0)
     if input["withWake"]:
-        from_before = min(advance, input["beforePrepareMinutes"])
+        from_before = js_min(advance, input["beforePrepareMinutes"])
         wake = alarm("WAKE", add_minutes(depart, -(input["prepareMinutes"] + advance - from_before)))
         result.append(wake)
         if input["beforePrepareMinutes"] > 0:

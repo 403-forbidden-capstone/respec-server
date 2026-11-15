@@ -6,10 +6,11 @@ Date.UTC(월 · 일 넘침 허용, 연도 0~99는 1900년대) · Date.parse(오�
 시각은 전부 UTC aware `datetime` 또는 epoch 밀리초 int. naive datetime은 오류로 막음.
 """
 
-import json
+import json as _json
 import math
 import re
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from ..core.read import js_length, js_trim  # noqa: F401  (다른 묶음이 여기서 함께 import)
@@ -67,6 +68,59 @@ def js_mod(a: float, b: float) -> float:
     return math.fmod(a, b)
 
 
+def js_max(*values: float) -> float:
+    """Math.max — NaN이 하나라도 있으면 NaN (Python max는 순서에 따라 NaN을 무시함). 인자가 없으면 -Infinity"""
+    if not values:
+        return -math.inf
+    if any(isinstance(v, float) and v != v for v in values):
+        return math.nan
+    return max(values)
+
+
+def js_min(*values: float) -> float:
+    """Math.min — NaN이 하나라도 있으면 NaN. 인자가 없으면 Infinity"""
+    if not values:
+        return math.inf
+    if any(isinstance(v, float) and v != v for v in values):
+        return math.nan
+    return min(values)
+
+
+def js_number_to_string(n: int | float) -> str:
+    """String(n) / `${n}` — 정수꼴은 소수점 없이(1e21 미만), 1e21 이상 · 1e-7 이하는 지수 표기(1e+21 · 1e-7), -0은 0, NaN · Infinity 글자"""
+    if isinstance(n, bool):
+        return "true" if n else "false"
+    if isinstance(n, int):
+        if abs(n) < 2**53:
+            return str(n)
+        n = float(n)  # JS 숫자는 실수라 큰 정수는 가까운 실수 값으로
+    if n != n:
+        return "NaN"
+    if n == math.inf:
+        return "Infinity"
+    if n == -math.inf:
+        return "-Infinity"
+    if n == 0:
+        return "0"
+    sign = "-" if n < 0 else ""
+    t = Decimal(repr(abs(n))).as_tuple()
+    digits = "".join(str(d) for d in t.digits).rstrip("0") or "0"
+    # 값 = 0.digits × 10^point
+    point = len("".join(str(d) for d in t.digits)) + t.exponent  # type: ignore[operator]
+    k = len(digits)
+    if k <= point <= 21:
+        body = digits + "0" * (point - k)
+    elif 0 < point <= 21:
+        body = digits[:point] + "." + digits[point:]
+    elif -6 < point <= 0:
+        body = "0." + "0" * (-point) + digits
+    else:
+        e = point - 1
+        exp = f"e{'+' if e >= 0 else '-'}{abs(e)}"
+        body = digits[0] + ("." + digits[1:] if k > 1 else "") + exp
+    return sign + body
+
+
 _DECIMAL = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*(?:[eE][+-]?[0-9]+)?|\.[0-9]+(?:[eE][+-]?[0-9]+)?)\Z")
 _RADIX = re.compile(r"0[xX][0-9a-fA-F]+\Z|0[oO][0-7]+\Z|0[bB][01]+\Z")
 
@@ -116,8 +170,22 @@ def json_safe(value: Any) -> Any:
 
 
 def js_json(value: Any) -> str:
-    """JSON.stringify(value) — 공백 없음 · 한글 그대로 · NaN/Infinity는 null"""
-    return json.dumps(json_safe(value), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    """JSON.stringify(value) — 공백 없음 · 한글 그대로 · NaN/Infinity는 null · 숫자는 JS 글자(1e+21 · 1e-7 · 5)"""
+    if value is None or isinstance(value, bool):
+        return "null" if value is None else ("true" if value else "false")
+    if isinstance(value, int | float):
+        return "null" if isinstance(value, float) and not math.isfinite(value) else js_number_to_string(value)
+    if isinstance(value, str):
+        return _json_str(value)
+    if isinstance(value, list | tuple):
+        return "[" + ",".join("null" if v is None else js_json(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ",".join(_json_str(str(k)) + ":" + js_json(v) for k, v in value.items()) + "}"
+    raise TypeError(f"JSON으로 만들 수 없는 값: {type(value).__name__}")
+
+
+def _json_str(text: str) -> str:
+    return _json.dumps(text, ensure_ascii=False)
 
 
 def ms(dt: datetime) -> int:
