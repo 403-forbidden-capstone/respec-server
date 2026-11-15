@@ -9,9 +9,28 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from .kakao import kakao_travel_minutes
+from .shared.env import get_settings
 from .shared.js import from_ms, ms
 from .shared.roll import RollDeps, TravelLookup, run_roll
-from .shared.supabase import Db
+from .shared.supabase import Db, _http
+
+
+def kakao_lookup() -> TravelLookup | None:
+    """KAKAO_REST_API_KEY가 있으면 카카오 길찾기 1번(공용 httpx 클라이언트), 없으면 None — Edge alarm-roll의 `kakaoKey ? … : undefined`와 같음.
+    실행 중인 이벤트 루프 안에서 부를 것 (스케줄러: async_runtime이 넣어 둔 클라이언트)"""
+    secret = get_settings().kakao_rest_api_key
+    key = secret.get_secret_value().strip() if secret is not None else ""
+    if not key:
+        return None
+    client = _http()
+
+    async def lookup(*, origin: Any, destination: Any, transport: Any) -> dict[str, Any]:
+        return await kakao_travel_minutes(
+            client, key, origin=origin, destination=destination, transport=transport
+        )
+
+    return lookup
 
 
 async def run_alarm_roll(
