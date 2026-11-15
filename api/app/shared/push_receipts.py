@@ -12,6 +12,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from .db import safe_db_message
 from .js import from_ms, ms, parse_iso, to_iso
 from .push import FetchLike, fetch_expo_receipts
 from .supabase import Db
@@ -54,7 +55,7 @@ async def run_receipt_check(
             .limit(MAX_PER_RUN)
         )
         if due.error:
-            log.error("[wake-check] push_tickets 조회 실패 %s", due.error.get("message"))
+            log.error("[wake-check] push_tickets 조회 실패 %s", safe_db_message(due.error.get("message")))
             return nothing
         rows: list[dict[str, Any]] = due.data or []
         if not rows:
@@ -97,12 +98,14 @@ async def run_receipt_check(
             )
             for dele in dels:
                 if dele.error:
-                    log.error("[wake-check] 만료 토큰 삭제 실패 %s", dele.error.get("message"))
+                    log.error(
+                        "[wake-check] 만료 토큰 삭제 실패 %s", safe_db_message(dele.error.get("message"))
+                    )
         finished = [r["ticket_id"] for r in [*resolved, *expired]]
         for part in _chunks(finished, DELETE_CHUNK):
             dele = await service.from_("push_tickets").delete().in_("ticket_id", part)
             if dele.error:
-                log.error("[wake-check] 영수증 표 정리 실패 %s", dele.error.get("message"))
+                log.error("[wake-check] 영수증 표 정리 실패 %s", safe_db_message(dele.error.get("message")))
         return {
             "checked": len(rows) if ok else len(resolved),
             "tokensRemoved": len(gone),

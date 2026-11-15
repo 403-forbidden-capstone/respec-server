@@ -17,7 +17,6 @@
 TS의 `can_send_push` · `plan_wake_ping`은 이 파일 안에서 DB 함수(rpc)로만 불림 (별도 TS 함수 없음).
 """
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -25,7 +24,7 @@ from typing import Any
 
 from ..core.errors import AppError
 from ..core.read import Reader
-from .db import db_fail, must
+from .db import db_fail, must, safe_db_message
 from .js import to_iso
 from .push import FetchLike, OutgoingMessage, SendOptions, SendResult, SleepLike, send_expo_messages
 from .push_copy import CHANNEL_IDS, CLIENT_KINDS, PATHS, compose_copy, is_group_kind
@@ -130,8 +129,16 @@ def _no_tokens(with_ping: bool = False) -> NotifyResult:
     }
 
 
-def _dump(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, default=str)
+def _shape(value: Any) -> str:
+    """RPC 응답을 로그에 남길 때 모양만 — 응답에 받는 사람 id 목록(recipients)이 있어 통째로 찍지 않음 (Edge는 JSON 전체를 찍었음)"""
+    if isinstance(value, dict):
+        status = value.get("status")
+        return (
+            f"dict status={status!r} keys={sorted(value)}"
+            if isinstance(status, str | None)
+            else f"dict keys={sorted(value)}"
+        )
+    return type(value).__name__
 
 
 async def _plan_ping(
@@ -155,7 +162,7 @@ async def _plan_ping(
     if status == "FORBIDDEN":
         raise AppError("FORBIDDEN", DENIED["WAKE_PING"])
     if not isinstance(status, str) or status not in PING_STATUSES:
-        log.error("[notify] plan_wake_ping 응답이 약속과 다름 %s", _dump(r.data))
+        log.error("[notify] plan_wake_ping 응답이 약속과 다름 %s", _shape(r.data))
         raise AppError("INTERNAL", INTERNAL_PROCESS_MESSAGE)
     assert data is not None
     ping: WakePing = {"status": status}
@@ -277,7 +284,7 @@ async def _notify_one(
         if "sendId" in reserved:
             undo = await service.from_("push_sends").delete().eq("send_id", reserved["sendId"])
             if undo.error:
-                log.error("[notify] 깨우기 횟수 되돌리기 실패 %s", undo.error.get("message"))
+                log.error("[notify] 깨우기 횟수 되돌리기 실패 %s", safe_db_message(undo.error.get("message")))
         return {**delivered, "ping": {"status": "NO_TOKENS"}}
     return {**delivered, "ping": reserved["ping"]}
 
@@ -315,7 +322,7 @@ async def plan_group_push(service: Db, sender_id: str, req: NotifyRequest) -> Gr
         or not isinstance(recipients, list)
         or not all(isinstance(r, str) for r in recipients)
     ):
-        log.error("[notify] plan_group_push 응답이 약속과 다름 %s", _dump(planned.data))
+        log.error("[notify] plan_group_push 응답이 약속과 다름 %s", _shape(planned.data))
         raise AppError("INTERNAL", INTERNAL_PROCESS_MESSAGE)
     silent_raw = plan.get("silent_recipients")
     silent = [r for r in silent_raw if isinstance(r, str)] if isinstance(silent_raw, list) else []
@@ -434,13 +441,13 @@ async def deliver(
             ]
         )
         if ins.error:
-            log.error("[notify] 푸시 영수증 기록 실패 %s", ins.error.get("message"))
+            log.error("[notify] 푸시 영수증 기록 실패 %s", safe_db_message(ins.error.get("message")))
 
     # 앱을 지웠거나 토큰이 바뀌어 못 받는 토큰은 지움
     if result["invalidTokens"]:
         dele = await service.from_("push_tokens").delete().in_("token", result["invalidTokens"])
         if dele.error:
-            log.error("[notify] 만료 토큰 삭제 실패 %s", dele.error.get("message"))
+            log.error("[notify] 만료 토큰 삭제 실패 %s", safe_db_message(dele.error.get("message")))
 
     # 보내지 못한 이유를 서버 로그에 남김 — 앱은 푸시 실패를 무시하므로 FCM 키 없음 · Expo 장애를 운영자가 알 길이 이것뿐
     if result.get("reason"):

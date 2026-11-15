@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 from collections.abc import Mapping
 from typing import Any, NoReturn
 
@@ -12,11 +13,19 @@ from ..core.errors import AppError
 
 log = logging.getLogger("respec.db")
 
+_QUOTED = re.compile(r'"[^"]*"')
+
+
+def safe_db_message(message: Any) -> str:
+    """PostgREST 오류 문구에서 따옴표 안 값을 가림 — 22P02(`invalid input syntax for type uuid: "<값>"`)처럼 입력값이 들어오는 경우가 있어서.
+    문구의 뜻(어떤 오류인지)은 남김"""
+    return _QUOTED.sub('"…"', str(message or ""))
+
 
 def db_fail(context: str, error: Mapping[str, Any]) -> NoReturn:
     code = error.get("code")
     # details에는 값(예: 중복 키의 토큰)이 들어갈 수 있어 서버 로그엔 안 남김 — 코드 · 문구만 (Edge는 details까지 찍었음)
-    log.error("[db] %s: %s %s", context, code or "", error.get("message"))
+    log.error("[db] %s: %s %s", context, code or "", safe_db_message(error.get("message")))
     if code == "42501":
         raise AppError("FORBIDDEN", "이 작업을 할 권한이 없어요")
     if code == "23505":

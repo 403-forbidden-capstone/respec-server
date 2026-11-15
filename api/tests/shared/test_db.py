@@ -39,3 +39,14 @@ def test_must_returns_data_or_raises():
     assert must("x", Result(data=None)) is None
     with pytest.raises(AppError):
         must("x", Result(error={"message": "m", "code": "42501"}))
+
+
+def test_db_log_masks_quoted_values_in_postgrest_message(caplog):
+    """22P02처럼 PostgREST 문구에 입력값이 따옴표로 들어오면 가림 — 뜻은 남김 (PR #10 재리뷰)"""
+    with caplog.at_level(logging.ERROR, logger="respec.db"), pytest.raises(AppError):
+        db_fail(
+            "alarms",
+            {"message": 'invalid input syntax for type uuid: "ExponentPushToken[secret]"', "code": "22P02"},
+        )
+    assert "invalid input syntax for type uuid" in caplog.text
+    assert "secret" not in caplog.text
