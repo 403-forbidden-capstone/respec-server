@@ -49,6 +49,16 @@ assert_contains "쿼리스트링이 붙으면 400" "$conf" 'if ($args != "") {'
 assert_eq "기본 서버(80 · 443) 접속 기록 끔" 2 "$(grep -c 'access_log off;' "$NG/respec-api.conf")"
 assert_eq "HTTP 모양의 기본 서버도 접속 기록 끔" 1 "$(grep -c 'access_log off;' "$NG/respec-api.http.conf")"
 
+echo "[3c] nginx 가 직접 만드는 오류 응답에도 CORS · 요청 번호 (본문은 그대로 — 앱이 JSON 이 아닌 본문은 상태 번호로 판정)"
+assert_contains "ACAO 는 변수로(upstream 이 안 붙인 경우만)" "$conf" 'add_header Access-Control-Allow-Origin $respec_cors_origin always;'
+assert_contains "Expose-Headers 도 변수로" "$conf" 'add_header Access-Control-Expose-Headers $respec_cors_expose always;'
+assert_contains "X-Request-Id 도 변수로" "$conf" 'add_header X-Request-Id $respec_request_id_header always;'
+assert_not_contains "ACAO 를 고정값으로 붙이면 api 응답에 두 번 나감" "$conf" 'add_header Access-Control-Allow-Origin "*"'
+assert_contains "ml 주소는 CORS 범위에서 뺌" "$glob" '~^/ml(/|$)  "ml";'
+# 위치 안에 add_header 가 있으면 서버 수준 add_header(HSTS · CORS …)를 물려받지 못함 → 443 서버 블록의 location 에는 add_header 를 두지 않음
+loc_adds=$(awk '/^server \{/ {n++} n==4 && /^    location / {inloc=1} inloc && /add_header/ {c++} inloc && /^    }/ {inloc=0} END {print c+0}' "$NG/respec-api.conf")
+assert_eq "443 서버 블록의 location 안 add_header 수" 0 "$loc_adds"
+
 echo "[4] 실제 nginx 로 문법 검사 (docker 엔진이 있을 때)"
 if ! docker info >/dev/null 2>&1; then
   echo "  skip docker 엔진이 없어 nginx -t 를 건너뜀 (CI · 새 서버 bootstrap 에서 검사함)"
@@ -72,6 +82,42 @@ else
     assert_rc "nginx $ver -t: $site" 0 "$rc"
     [[ $rc == 0 ]] || echo "$out"
    done
+  done
+fi
+
+echo "[5] 실제 nginx 로 응답 동작 (오류 응답의 CORS · 요청 번호, api 응답은 헤더 중복 없음) — docker 엔진이 있을 때"
+if ! docker info >/dev/null 2>&1; then
+  echo "  skip docker 엔진이 없어 응답 동작 시험을 건너뜀 (CI 에서 돎)"
+else
+  for ver in 1.24 1.28; do
+    cid=""
+    rc=0
+    # MSYS_NO_PATHCONV: Windows Git Bash 가 컨테이너 안 경로(/start.sh)를 C:/Program Files/Git/start.sh 로 바꾸지 않게
+    cid=$(MSYS_NO_PATHCONV=1 docker run -d --rm \
+      -v "$(native_path "$NG/respec-global.conf"):/etc/nginx/conf.d/00-global.conf:ro" \
+      -v "$(native_path "$NG/respec-api.conf"):/etc/nginx/conf.d/10-site.conf:ro" \
+      -v "$(native_path "$DEPLOY_DIR/tests/nginx_stub.conf"):/etc/nginx/conf.d/20-stub.conf:ro" \
+      -v "$(native_path "$DEPLOY_DIR/tests/nginx_start.sh"):/start.sh:ro" \
+      -v "$(native_path "$DEPLOY_DIR/tests/nginx_behavior.sh"):/behavior.sh:ro" \
+      "nginx:$ver" bash /start.sh) || rc=$?
+    assert_rc "nginx $ver 컨테이너 시작" 0 "$rc"
+    [[ $rc == 0 ]] || continue
+    # 서버가 뜰 때까지 기다림
+    for _ in $(seq 1 40); do
+      MSYS_NO_PATHCONV=1 docker exec "$cid" curl -sk -o /dev/null --resolve api.respecalarm.com:443:127.0.0.1 https://api.respecalarm.com/health 2>/dev/null && break
+      sleep 0.5
+    done
+    # MSYS_NO_PATHCONV: Windows Git Bash 가 /behavior.sh 를 C:/Program Files/Git/behavior.sh 로 바꾸지 않게
+    res=$(MSYS_NO_PATHCONV=1 docker exec "$cid" bash /behavior.sh 2>&1) || true
+    docker rm -f "$cid" >/dev/null 2>&1 || true
+    n=0
+    while IFS=$'\t' read -r name status detail; do
+      [[ -n $name ]] || continue
+      n=$((n + 1))
+      assert_eq "nginx $ver 동작: $name" ok "$status"
+      [[ $status == ok ]] || echo "      $detail"
+    done <<<"$res"
+    assert_eq "nginx $ver 동작 시험 항목 수(32개)" 1 "$([[ $n -ge 32 ]] && echo 1 || echo 0)"
   done
 fi
 
