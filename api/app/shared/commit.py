@@ -1,13 +1,12 @@
 """본 레포 supabase/functions/_shared/commit.ts의 서버판 (기준 b140f70) — alarm-commit이 DB에 쓰는 부분
 
-쓰기는 service_role 클라이언트로, 읽기는 부른 사람의 RLS 클라이언트로. 어떤 행을 쓸지는 commit_core(순수)가 정함.
-PostgREST에는 트랜잭션이 없어 순서(약속 → 참여 조건 → 알람 → 고친 값 기록)대로 쓰고, 이번 호출이 새로 만든 약속 · 참여 조건은
-중간에 실패하면 지워서(CASCADE) 되돌림 (새 트랜잭션은 안 씀 — 원본과 같은 방식). 같은 요청을 다시 보냈을 때 같은 상태가 되는 건 기존 약속(appointment_id)이 있을 때만 —
-새 약속(appointment)은 응답만 잃고 다시 보내면 약속 · 알람이 두 벌 생기고, 일정 없는 알람도 alarm_id 없이 다시 보내면 하나 더 생김 (요청 키는 아직 안 받음).
-근본 해결은 DB 함수(RPC)로 묶는 것.
+읽기는 부른 사람의 RLS 클라이언트로, 쓰기는 service_role로 DB 함수 하나(public.alarm_commit_apply)를 한 번 불러서 — 약속 → 참여 조건 → 알람(고치기 · 만들기 · 지우기)
+→ 고친 값 기록이 한 트랜잭션이라 중간에 실패하면 전부 취소됨 (TS commit.ts는 PostgREST로 따로 써서 손으로 되돌렸지만 서버판은 이 방식 — 정할 일 0-10).
+어떤 행을 쓸지는 commit_core(순수)가 정하고, 새 약속 · 참여 조건 · 알람의 id는 서버가 미리 만들어(uuid4) 고친 값 기록까지 함수 부르기 전에 완성함.
+요청 키(Idempotency-Key)가 있으면 같은 요청을 다시 보내도 첫 결과를 그대로 돌려줌 (DB 함수가 private.request_keys로 막음). 키가 없으면 중복 방지 없음.
 """
 
-import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -15,7 +14,7 @@ from typing import Any
 from ..core.errors import AppError
 from .calc.intensity import auto_level, resolve_intensity, wake_sensitivity_of
 from .commit_core import build_edit_log_rows, diff_alarms
-from .db import must
+from .db import db_fail, must
 from .draft import UNSET
 from .js import ms, parse_iso, to_iso
 from .plan import load_profile
@@ -23,8 +22,6 @@ from .plan_core import Plan, PlanDraft, PlanInputs, resolve_overrides
 from .ring_package import AppointmentNotice, build_ring_packages, canceled_alarm_ids, subtitle_for
 from .supabase import Db
 from .tz import local_day_range
-
-log = logging.getLogger("respec.commit")
 
 
 @dataclass
@@ -98,17 +95,55 @@ def summarize(a: dict[str, Any]) -> dict[str, Any]:
     return {key: a[key] for key in SUMMARY_KEYS if key in a}
 
 
-async def _save_edit_logs(
-    ctx: CommitCtx, appointment_id: str | None, alarms: list[dict[str, Any]], edits: list[Any]
-) -> None:
-    if not edits:
-        return
-    must(
-        "user_edit_logs",
-        await ctx.service.from_("user_edit_logs").insert(
-            build_edit_log_rows(ctx.user_id, appointment_id, alarms, edits)
-        ),
-    )
+def _new_id() -> str:
+    return str(uuid.uuid4())
+
+
+def _rpc_args(
+    ctx: CommitCtx,
+    *,
+    key: str | None,
+    request_hash: str | None,
+    mode: str,
+    appointment: dict[str, Any] | None,
+    appointment_ref: dict[str, Any] | None,
+    participant: dict[str, Any] | None,
+    alarm_updates: list[dict[str, Any]],
+    alarm_inserts: list[dict[str, Any]],
+    alarm_removes: list[str],
+    edit_logs: list[dict[str, Any]],
+    before: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """DB 함수 alarm_commit_apply의 인자 (키 이름은 SQL 시그니처 그대로)"""
+    return {
+        "p_user_id": ctx.user_id,
+        "p_key": key,
+        "p_request_hash": request_hash if key else None,
+        "p_mode": mode,
+        "p_appointment": appointment,
+        "p_appointment_ref": appointment_ref,
+        "p_participant": participant,
+        "p_alarm_updates": alarm_updates,
+        "p_alarm_inserts": alarm_inserts,
+        "p_alarm_removes": alarm_removes,
+        "p_edit_logs": edit_logs,
+        "p_before": before,
+    }
+
+
+async def _apply(ctx: CommitCtx, args: dict[str, Any], not_found_message: str) -> dict[str, Any]:
+    """DB 함수를 한 번 부름 — 오류는 서버 함수 오류로 (같은 요청 키로 다른 내용 = CONFLICT, 못 찾음(P0002) = NOT_FOUND)"""
+    result = await ctx.service.rpc("alarm_commit_apply", args)
+    error = result.error
+    if error:
+        if "IDEMPOTENCY_KEY_REUSED" in str(error.get("message") or ""):
+            raise AppError(
+                "CONFLICT", "같은 요청 키로 다른 내용을 보냈어요. 새로고침한 뒤 다시 시도해 주세요"
+            )
+        if error.get("code") == "P0002":
+            raise AppError("NOT_FOUND", not_found_message)
+        db_fail("alarm_commit_apply", error)
+    return must("alarm_commit_apply", result)
 
 
 # 저장해도 되는 계획인지 — 아니면 사용자에게 보일 오류로
@@ -154,8 +189,10 @@ async def persist_appointment(
     edits: list[Any],
     time_zone: str,
     created: Any = None,  # 새 약속이면 (기존 약속이면 없음 — 기존 약속은 안 고침, D41)
+    key: str | None = None,  # 요청 키 (Idempotency-Key 헤더). 없으면 중복 방지 없음
+    request_hash: str | None = None,  # 요청 본문 해시 — 같은 키로 다른 내용을 가려냄
 ) -> dict[str, Any]:
-    service, user_id, now = ctx.service, ctx.user_id, ctx.now
+    user_id, now = ctx.user_id, ctx.now
     # 지난 공동 약속에는 참여 조건을 새로 만들 수 없음 (9-32 · DB 정책 appointment_participants_insert_own와 같은 규칙). 이미 참여 중인 사람의 고치기는 그대로.
     #   '지난'은 하루 경계 — 내 폰 시간대의 오늘 0시보다 앞의 약속 (오늘 이미 지난 약속은 오늘 안에는 참여할 수 있음, 9-러)
     if inputs.appointment and not inputs.participant and inputs.appointment.get("group_id") is not None:
@@ -167,157 +204,132 @@ async def persist_appointment(
     travel = plan.travel.chosen
     place = plan.basics.destination
     place_name = place.name
-    created_appointment_id: str | None = None
-    created_participant_id: str | None = None
 
-    try:
-        # 1. 약속 (새 약속일 때만 만듦)
-        appointment: dict[str, Any] | None = inputs.appointment
-        if not appointment:
-            if not created:
-                raise AppError("VALIDATION_FAILED", "appointment_id 또는 appointment가 필요해요")
-            destination = draft.destination
-            row = must(
-                "appointments insert",
-                await service.from_("appointments")
-                .insert(
-                    {
-                        "creator_id": user_id,
-                        "group_id": _first(created, "group_id", "groupId"),
-                        "title": _first(created, "title"),
-                        "appointment_at": to_iso(plan.basics.at),
-                        "dest_name": place_name,
-                        "dest_lat": place.lat,
-                        "dest_lng": place.lng,
-                        # 목적지 감지 반경 (D68). 새 약속일 때만 — 기존 약속은 안 고침
-                        "dest_radius_m": _first(destination, "radius_m", "radiusM") if destination else None,
-                        "importance": plan.basics.importance,
-                        # D44. 이 호출은 첫 회차만 만듦 — 다음 회차는 alarm-roll이 14일치를 미리 만듦 (D4 A, roll.ts)
-                        "recurrence_rule": _recurrence_of(created),
-                    }
-                )
-                .select(APPOINTMENT_COLUMNS)
-                .single(),
-            )
-            created_appointment_id = row["appointment_id"]
-            appointment = row
-
-        # 2. 내 참여 조건 (이동 · 준비 · 여유는 약속 시점 값을 그대로 보관, 4.4)
-        participant_fields = {
-            "origin_name": plan.basics.origin.name,
-            "origin_lat": plan.basics.origin.lat,
-            "origin_lng": plan.basics.origin.lng,
-            "transport_type": plan.basics.transport,
-            "est_travel_minutes": plan.travel_minutes,
-            "travel_source": travel.source,
-            "prepare_minutes": plan.prepare["minutes"],
-            "buffer_minutes": plan.basics.buffer_minutes,
+    # 1. 약속 (새 약속일 때만 만듦) — id는 서버가 미리 만듦
+    appointment: dict[str, Any] | None = inputs.appointment
+    new_appointment: dict[str, Any] | None = None
+    if not appointment:
+        if not created:
+            raise AppError("VALIDATION_FAILED", "appointment_id 또는 appointment가 필요해요")
+        destination = draft.destination
+        new_appointment = {
+            "appointment_id": _new_id(),
+            "creator_id": user_id,
+            "group_id": _first(created, "group_id", "groupId"),
+            "title": _first(created, "title"),
+            "appointment_at": to_iso(plan.basics.at),
+            "dest_name": place_name,
+            "dest_lat": place.lat,
+            "dest_lng": place.lng,
+            # 목적지 감지 반경 (D68). 새 약속일 때만 — 기존 약속은 안 고침
+            "dest_radius_m": _first(destination, "radius_m", "radiusM") if destination else None,
+            "importance": plan.basics.importance,
+            # D44. 이 호출은 첫 회차만 만듦 — 다음 회차는 alarm-roll이 14일치를 미리 만듦 (D4 A, roll.ts)
+            "recurrence_rule": _recurrence_of(created),
         }
-        if inputs.participant:
-            participant_id = inputs.participant["participant_id"]
-            must(
-                "appointment_participants update",
-                await service.from_("appointment_participants")
-                .update(participant_fields)
-                .eq("participant_id", participant_id)
-                .eq("user_id", user_id),
-            )
-        else:
-            row = must(
-                "appointment_participants insert",
-                await service.from_("appointment_participants")
-                .insert(
-                    {
-                        "appointment_id": appointment["appointment_id"],
-                        "user_id": user_id,
-                        **participant_fields,
-                    }
-                )
-                .select("participant_id")
-                .single(),
-            )
-            participant_id = row["participant_id"]
-            created_participant_id = participant_id
+        appointment_id = new_appointment["appointment_id"]
+    else:
+        appointment_id = appointment["appointment_id"]
+    appointment_ref = (
+        None
+        if new_appointment
+        else {
+            "appointment_id": appointment_id,
+            "title": appointment["title"],
+            "appointment_at": appointment["appointment_at"],
+        }
+    )
 
-        # 3. 알람 — 고치기 → 만들기 → 지우기 순 (중간에 실패해도 있던 알람이 먼저 사라지지 않게)
-        diff = diff_alarms(
-            plan,
-            inputs.existing_alarms,
-            now=now,
-            enabled=_first(draft, "enabled"),
-            replace_existing=replace_existing,
-        )
-        diff_update = _first(diff, "update") or []
-        diff_insert = _first(diff, "insert") or []
-        diff_remove = _first(diff, "remove") or []
-        touched: list[dict[str, Any]] = []
-        for u in diff_update:
-            touched.append(
-                must(
-                    "alarms update",
-                    await service.from_("alarms")
-                    .update(_first(u, "patch"))
-                    .eq("alarm_id", _first(u, "alarm_id"))
-                    .eq("user_id", user_id)
-                    .select(ALARM_COLUMNS)
-                    .single(),
-                )
-            )
-        if diff_insert:
-            rows = [{**w, "user_id": user_id, "participant_id": participant_id} for w in diff_insert]
-            touched.extend(
-                must("alarms insert", await service.from_("alarms").insert(rows).select(ALARM_COLUMNS))
-            )
-        if diff_remove:
-            must(
-                "alarms delete",
-                await service.from_("alarms").delete().in_("alarm_id", diff_remove).eq("user_id", user_id),
-            )
-        updated_ids = {_first(u, "alarm_id") for u in diff_update}
-        untouched = [
+    # 2. 내 참여 조건 (이동 · 준비 · 여유는 약속 시점 값을 그대로 보관, 4.4)
+    participant_fields = {
+        "origin_name": plan.basics.origin.name,
+        "origin_lat": plan.basics.origin.lat,
+        "origin_lng": plan.basics.origin.lng,
+        "transport_type": plan.basics.transport,
+        "est_travel_minutes": plan.travel_minutes,
+        "travel_source": travel.source,
+        "prepare_minutes": plan.prepare["minutes"],
+        "buffer_minutes": plan.basics.buffer_minutes,
+    }
+    if inputs.participant:
+        participant_id = inputs.participant["participant_id"]
+        participant = {"participant_id": participant_id, "is_new": False, "fields": participant_fields}
+    else:
+        participant_id = _new_id()
+        participant = {"participant_id": participant_id, "is_new": True, "fields": participant_fields}
+
+    # 3. 알람 — 고치기 → 만들기 → 지우기 (순서는 DB 함수가 지킴)
+    diff = diff_alarms(
+        plan,
+        inputs.existing_alarms,
+        now=now,
+        enabled=_first(draft, "enabled"),
+        replace_existing=replace_existing,
+    )
+    diff_update = _first(diff, "update") or []
+    diff_insert = _first(diff, "insert") or []
+    diff_remove = _first(diff, "remove") or []
+    alarm_updates = [{"alarm_id": _first(u, "alarm_id"), "patch": _first(u, "patch")} for u in diff_update]
+    alarm_inserts = [
+        {**w, "alarm_id": _new_id(), "user_id": user_id, "participant_id": participant_id}
+        for w in diff_insert
+    ]
+    updated_ids = {u["alarm_id"] for u in alarm_updates}
+    by_id = {a["alarm_id"]: a for a in inputs.existing_alarms}
+    # 저장 뒤 알람 목록 (고친 것 → 만든 것 → 그대로인 것) — 고친 값 기록이 알람 id를 찾는 데 씀. DB 함수의 after와 같은 순서
+    saved_alarms = [
+        *[{**by_id.get(u["alarm_id"], {}), "alarm_id": u["alarm_id"], **u["patch"]} for u in alarm_updates],
+        *alarm_inserts,
+        *[
             a
             for a in inputs.existing_alarms
             if a["alarm_id"] not in diff_remove and a["alarm_id"] not in updated_ids
-        ]
-        after = [*touched, *untouched]
+        ],
+    ]
 
-        # 4. 고친 값 기록 (user_edit_logs) — 요청에 담긴 것만. 같은 요청을 다시 보내면 같은 줄이 또 들어감 (멱등 키는 아직 없음)
-        await _save_edit_logs(ctx, appointment["appointment_id"], after, edits)
+    # 4. 고친 값 기록 (user_edit_logs) — 요청에 담긴 것만
+    edit_logs = build_edit_log_rows(user_id, appointment_id, saved_alarms, edits) if edits else []
 
-        # 5. 응답
-        return {
-            "appointment_id": appointment["appointment_id"],
-            "participant_id": participant_id,
-            "alarms": [summarize(a) for a in after],
-            "ring_packages": build_ring_packages(
-                alarms=after,
-                title=appointment["title"],
-                subtitle=subtitle_for(parse_iso(appointment["appointment_at"]), place_name, time_zone),
-                depart_at=plan.departure,
-                # 준비 · 출발 알림 문구와 기상 음성 문장 (앱 reconcile이 같은 값으로 같은 문구를 만듦 — 이동은 저장한 est_travel_minutes)
-                appointment=AppointmentNotice(
-                    appointment_at=parse_iso(appointment["appointment_at"]),
-                    travel_minutes=plan.travel_minutes,
-                    time_zone=time_zone,
-                ),
+    # 5. 한 번에 저장 → 응답
+    saved = await _apply(
+        ctx,
+        _rpc_args(
+            ctx,
+            key=key,
+            request_hash=request_hash,
+            mode="APPOINTMENT",
+            appointment=new_appointment,
+            appointment_ref=appointment_ref,
+            participant=participant,
+            alarm_updates=alarm_updates,
+            alarm_inserts=alarm_inserts,
+            alarm_removes=list(diff_remove),
+            edit_logs=edit_logs,
+            before=inputs.existing_alarms,
+        ),
+        "고칠 약속 알람을 찾을 수 없어요",
+    )
+    after = saved["after"]
+    saved_appointment = saved["appointment"]
+    return {
+        "appointment_id": saved_appointment["appointment_id"],
+        "participant_id": saved["participant_id"],
+        "alarms": [summarize(a) for a in after],
+        "ring_packages": build_ring_packages(
+            alarms=after,
+            title=saved_appointment["title"],
+            subtitle=subtitle_for(parse_iso(saved_appointment["appointment_at"]), place_name, time_zone),
+            depart_at=plan.departure,
+            # 준비 · 출발 알림 문구와 기상 음성 문장 (앱 reconcile이 같은 값으로 같은 문구를 만듦 — 이동은 저장한 est_travel_minutes)
+            appointment=AppointmentNotice(
+                appointment_at=parse_iso(saved_appointment["appointment_at"]),
+                travel_minutes=plan.travel_minutes,
+                time_zone=time_zone,
             ),
-            "canceled_alarm_ids": canceled_alarm_ids(before=inputs.existing_alarms, after=after),
-            "warnings": plan.warnings,
-        }
-    except Exception:
-        # 이번 호출이 새로 만든 것만 되돌림 (기존 약속 · 참여 조건 · 알람은 그대로 — 같은 요청을 다시 보내면 이어서 맞춰짐)
-        try:
-            if created_appointment_id:
-                await service.from_("appointments").delete().eq("appointment_id", created_appointment_id)
-            elif created_participant_id:
-                await (
-                    service.from_("appointment_participants")
-                    .delete()
-                    .eq("participant_id", created_participant_id)
-                )
-        except Exception:
-            log.exception("[alarm-commit] 되돌리기 실패")
-        raise
+        ),
+        "canceled_alarm_ids": canceled_alarm_ids(before=saved["before"], after=after),
+        "warnings": plan.warnings,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -326,9 +338,15 @@ async def persist_appointment(
 
 
 async def commit_standalone(
-    ctx: CommitCtx, *, alarm: Any, edits: list[Any], time_zone: str
+    ctx: CommitCtx,
+    *,
+    alarm: Any,
+    edits: list[Any],
+    time_zone: str,
+    key: str | None = None,  # 요청 키 (Idempotency-Key 헤더). 없으면 중복 방지 없음
+    request_hash: str | None = None,
 ) -> dict[str, Any]:
-    user_db, service, user_id, now = ctx.user_db, ctx.service, ctx.user_id, ctx.now
+    user_db, user_id, now = ctx.user_db, ctx.user_id, ctx.now
     alarm_id = _first(alarm, "alarm_id", "alarmId")
     alarm_scheduled_at = _first(alarm, "scheduled_at", "scheduledAt")
     alarm_enabled = _first(alarm, "is_enabled", "isEnabled")
@@ -393,34 +411,42 @@ async def commit_standalone(
     else:
         recurrence = existing.get("recurrence_rule") if existing else None
 
+    alarm_updates: list[dict[str, Any]] = []
+    alarm_inserts: list[dict[str, Any]] = []
     if existing:
-        saved = must(
-            "alarms update",
-            await service.from_("alarms")
-            .update({**write, "recurrence_rule": recurrence})
-            .eq("alarm_id", existing["alarm_id"])
-            .eq("user_id", user_id)
-            .select(ALARM_COLUMNS)
-            .single(),
-        )
+        patch = {**write, "recurrence_rule": recurrence}
+        alarm_updates = [{"alarm_id": existing["alarm_id"], "patch": patch}]
+        saved_alarm = {**existing, **patch}
     else:
-        saved = must(
-            "alarms insert",
-            await service.from_("alarms")
-            .insert(
-                {
-                    **write,
-                    "recurrence_rule": recurrence,
-                    "user_id": user_id,
-                    "participant_id": None,
-                    "routine_id": None,
-                }
-            )
-            .select(ALARM_COLUMNS)
-            .single(),
-        )
+        saved_alarm = {
+            **write,
+            "recurrence_rule": recurrence,
+            "alarm_id": _new_id(),
+            "user_id": user_id,
+            "participant_id": None,
+            "routine_id": None,
+        }
+        alarm_inserts = [saved_alarm]
 
-    await _save_edit_logs(ctx, None, [saved], edits)
+    result = await _apply(
+        ctx,
+        _rpc_args(
+            ctx,
+            key=key,
+            request_hash=request_hash,
+            mode="STANDALONE",
+            appointment=None,
+            appointment_ref=None,
+            participant=None,
+            alarm_updates=alarm_updates,
+            alarm_inserts=alarm_inserts,
+            alarm_removes=[],
+            edit_logs=build_edit_log_rows(user_id, None, [saved_alarm], edits) if edits else [],
+            before=[existing] if existing else [],
+        ),
+        "고칠 알람을 찾을 수 없어요",
+    )
+    (saved,) = result["after"]
 
     return {
         "alarm_id": saved["alarm_id"],
@@ -428,6 +454,6 @@ async def commit_standalone(
         "ring_packages": build_ring_packages(
             alarms=[saved], title="알람", subtitle=subtitle_for(scheduled_at, None, time_zone)
         ),
-        "canceled_alarm_ids": canceled_alarm_ids(before=[existing] if existing else [], after=[saved]),
+        "canceled_alarm_ids": canceled_alarm_ids(before=result["before"], after=[saved]),
         "warnings": [],
     }

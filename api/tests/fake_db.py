@@ -11,6 +11,7 @@ supabase-js 쿼리 빌더 중 서버 함수가 쓰는 모양만 흉내 냄. 인�
   upsert(…, on_conflict=…, ignore_duplicates=True)는 PostgREST처럼 새로 들어간 행만 돌려줌 (ON CONFLICT DO NOTHING … RETURNING). on_conflict는 'a,b,c'처럼 여러 칸도 됨
   임베드: appointment_participants를 읽을 때 `appointments!inner(…)` · `alarms!inner(…)`와 'alarms.alarm_type' 같은 점 붙은 거르기만 흉내 (그날 첫 일정 · 이동 기록 읽기용)
   (L4) jsonb 칸 거르기: eq('server_state->>rev', '3') 같은 `->` · `->>` 경로 (낙관적 잠금 비교용). alarm_events를 읽을 때 `alarms(…, appointment_participants(…))` 왼쪽 임베드(앞 출발 읽기용).
+  (S8) with_commit_rpc()는 alarm_commit_apply(저장 DB 함수, 한 트랜잭션 · 요청 키)를 같은 규칙으로 흉내 — 한 번에 적용, 어디서든 실패(fail_on 포함)하면 표 전부 되돌림
   (L4) 표: conversation_sessions · ai_calls · user_questions — 기본키 · 시각 기본값. 서버 키만 쓰는 두 칸 트리거(turns · server_state)는 흉내 안 냄
 
 TS와 이름이 달라진 곳: failOn → fail_on(dict {"table", "op"}의 목록) · rpcHandlers → rpc_handlers · rpcCalls → rpc_calls({"name", "args"}) ·
@@ -180,6 +181,12 @@ class FakeDb:
         self.rpc_handlers.setdefault("roll_due_series", lambda args: roll_due_series(self, args))
         return self
 
+    def with_commit_rpc(self) -> "FakeDb":
+        """alarm_commit_apply.sql(저장 DB 함수 — 약속 · 참여 조건 · 알람 · 고친 값 기록을 한 트랜잭션으로, 요청 키로 다시 보내도 첫 결과)를 같은 규칙으로 흉내 내서 등록.
+        이미 등록한 handler는 덮지 않음. 요청 키 표는 tables["private.request_keys"]"""
+        self.rpc_handlers.setdefault("alarm_commit_apply", lambda args: commit_apply(self, args))
+        return self
+
     def timezone_of(self, user_id: Any) -> str:
         profile = next((p for p in self.rows("profiles") if p.get("user_id") == user_id), None)
         tz = profile.get("timezone") if profile else None
@@ -197,6 +204,14 @@ class FakeDb:
             self.tables["alarms"] = [a for a in self.rows("alarms") if a.get("participant_id") not in ids]
 
 
+class RpcError(Exception):
+    """DB 함수 안에서 errcode를 달아 던진 오류 (P0001 · P0002 …)"""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class FakeRpc:
     """rpc() 결과 — await 하면 Result"""
 
@@ -211,6 +226,8 @@ class FakeRpc:
             return Result(error={"message": f"function {self._name} does not exist", "code": "42883"})
         try:
             return Result(data=handler(self._args))
+        except RpcError as exc:  # DB 함수의 raise exception ... using errcode
+            return Result(error={"message": str(exc), "code": exc.code})
         except Exception as exc:  # noqa: BLE001 — handler가 던지면 DB 오류로 (TS와 같음)
             return Result(error={"message": str(exc), "code": "XX000"})
 
@@ -592,6 +609,178 @@ class FakeQuery:
                 return Result(data=out[0] if out else None)
             return Result(error={"message": "multiple rows", "code": "PGRST116"})
         return Result(data=out, count=count)
+
+
+ALARM_COLUMNS = (
+    "alarm_id",
+    "participant_id",
+    "user_id",
+    "alarm_type",
+    "scheduled_at",
+    "intensity",
+    "voice_tone",
+    "sound_key",
+    "vibration",
+    "is_enabled",
+    "snooze_limit",
+    "time_source",
+    "intensity_source",
+    "recurrence_rule",
+)
+REQUEST_KEYS = "private.request_keys"
+
+
+def commit_apply(db: FakeDb, args: dict[str, Any]) -> Any:
+    """public.alarm_commit_apply 흉내 — 한 번에 적용하고 어디서든 실패하면 표 전부(요청 키 줄 포함)를 부르기 전으로 되돌림"""
+    saved = {t: [(r, copy.deepcopy(r)) for r in rows] for t, rows in db.tables.items()}
+    try:
+        return _commit_apply(db, args)
+    except BaseException:
+        for t in list(db.tables):
+            if t not in saved:
+                db.tables[t] = []
+        for t, pairs in saved.items():
+            for (
+                row,
+                original,
+            ) in pairs:  # 행 객체는 그대로 두고 값만 되돌림 (시험이 들고 있는 참조가 계속 맞게)
+                row.clear()
+                row.update(original)
+            db.tables[t] = [row for row, _ in pairs]
+        raise
+
+
+def _ok(result: Result) -> Any:
+    if result.error:
+        raise RpcError(result.error.get("code", "XX000"), result.error.get("message", ""))
+    return result.data
+
+
+def _alarm_columns(row: Row) -> Row:
+    return {k: copy.deepcopy(row[k]) for k in ALARM_COLUMNS if k in row}
+
+
+def _commit_apply(db: FakeDb, a: dict[str, Any]) -> dict[str, Any]:
+    uid, key, mode = a["p_user_id"], a.get("p_key"), a["p_mode"]
+    key_row: Row | None = None
+    if key:
+        if not a.get("p_request_hash"):
+            raise RpcError("P0001", "request_hash required")
+        found = next(
+            (
+                r
+                for r in db.rows(REQUEST_KEYS)
+                if r["user_id"] == uid and r["fn"] == "alarm-commit" and r["key"] == key
+            ),
+            None,
+        )
+        if found is not None:
+            if found["request_hash"] != a["p_request_hash"]:
+                raise RpcError("P0001", "IDEMPOTENCY_KEY_REUSED")
+            if found["result"] is not None:
+                return {**copy.deepcopy(found["result"]), "replayed": True}
+        key_row = {
+            "user_id": uid,
+            "fn": "alarm-commit",
+            "key": key,
+            "request_hash": a["p_request_hash"],
+            "result": None,
+        }
+        db.rows(REQUEST_KEYS).append(key_row)
+
+    # 약속
+    if a.get("p_appointment") is not None:
+        inserted = _ok(
+            db.from_("appointments")
+            .insert({**a["p_appointment"], "creator_id": uid})
+            .select("appointment_id, title, appointment_at")
+            .single()
+            ._run()
+        )
+        appointment: Row | None = inserted
+    else:
+        appointment = copy.deepcopy(a.get("p_appointment_ref"))
+
+    # 참여 조건
+    participant_id: Any = None
+    p = a.get("p_participant")
+    if mode == "APPOINTMENT" and p is not None:
+        participant_id = p["participant_id"]
+        if p["is_new"]:
+            _ok(
+                db.from_("appointment_participants")
+                .insert(
+                    {
+                        **p["fields"],
+                        "participant_id": participant_id,
+                        "appointment_id": (appointment or {}).get("appointment_id"),
+                        "user_id": uid,
+                    }
+                )
+                .select("participant_id")
+                ._run()
+            )
+        else:
+            done = _ok(
+                db.from_("appointment_participants")
+                .update(p["fields"])
+                .eq("participant_id", participant_id)
+                .eq("user_id", uid)
+                .select("participant_id")
+                ._run()
+            )
+            if not done:
+                raise RpcError("P0002", "participant not found")
+
+    # 알람 — 고치기 → 만들기 → 지우기
+    updated: list[Row] = []
+    for u in a.get("p_alarm_updates") or []:
+        rows = _ok(
+            db.from_("alarms")
+            .update(u["patch"])
+            .eq("alarm_id", u["alarm_id"])
+            .eq("user_id", uid)
+            .select(", ".join(ALARM_COLUMNS))
+            ._run()
+        )
+        if len(rows) != 1:
+            raise RpcError("P0002", "alarm not found")
+        updated.append(_alarm_columns(rows[0]))
+    inserts = [
+        {
+            **w,
+            "user_id": uid,
+            "participant_id": participant_id if mode == "APPOINTMENT" else None,
+            **({"routine_id": None} if mode == "STANDALONE" else {}),
+        }
+        for w in a.get("p_alarm_inserts") or []
+    ]
+    made: list[Row] = []
+    if inserts:
+        made = [
+            _alarm_columns(r)
+            for r in _ok(db.from_("alarms").insert(inserts).select(", ".join(ALARM_COLUMNS))._run())
+        ]
+    removes = a.get("p_alarm_removes") or []
+    if removes:
+        _ok(db.from_("alarms").delete().in_("alarm_id", removes).eq("user_id", uid)._run())
+
+    # 고친 값 기록
+    if a.get("p_edit_logs"):
+        _ok(db.from_("user_edit_logs").insert(a["p_edit_logs"])._run())
+
+    before = copy.deepcopy(a.get("p_before") or [])
+    gone = set(removes) | {r["alarm_id"] for r in updated}
+    result = {
+        "replayed": False,
+        "appointment": appointment,
+        "participant_id": participant_id,
+        "after": [*updated, *made, *[r for r in before if r["alarm_id"] not in gone]],
+        "before": before,
+    }
+    if key_row is not None:
+        key_row["result"] = copy.deepcopy(result)
+    return result
 
 
 def _cmp_or(v: Any, val: Any, fallback: float) -> float:

@@ -94,7 +94,7 @@ class Env:
 
 
 def setup(now: datetime, users: list[str] | None = None) -> Env:
-    db = FakeDb().with_roll_rpc()
+    db = FakeDb().with_roll_rpc().with_commit_rpc()
     db.now = now
     for user_id in users if users is not None else [A]:
         db.rows("profiles").append(

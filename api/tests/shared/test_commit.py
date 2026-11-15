@@ -38,7 +38,7 @@ TZ = "Asia/Seoul"
 
 
 def setup():
-    db = FakeDb()
+    db = FakeDb().with_commit_rpc()
     ctx = CommitCtx(user_id=USER, user_db=db, service=db, now=NOW)
     return SimpleNamespace(db=db, ctx=ctx)
 

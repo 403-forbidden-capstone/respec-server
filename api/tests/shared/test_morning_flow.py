@@ -64,7 +64,7 @@ def fake_kakao(seconds):
 
 
 def setup(now, travel_seconds):
-    db = FakeDb()
+    db = FakeDb().with_commit_rpc()
     db.rows("profiles").append(
         {
             "user_id": USER,

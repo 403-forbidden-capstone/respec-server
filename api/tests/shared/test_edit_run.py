@@ -107,7 +107,7 @@ def profile_row(user_id: str, **over: Any) -> dict[str, Any]:
 
 
 def setup(users: list[str] | None = None) -> Env:
-    db = FakeDb().with_roll_rpc()
+    db = FakeDb().with_roll_rpc().with_commit_rpc()
     db.now = MON_10
     for user_id in users or [A]:
         db.rows("profiles").append(profile_row(user_id))
