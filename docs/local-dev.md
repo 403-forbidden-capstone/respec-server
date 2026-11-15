@@ -93,7 +93,7 @@ npx supabase@2.119.0 --workdir dev/.stack functions serve
 함수가 쓰는 비밀값(카카오 · Anthropic 키 등)은 본 레포 `supabase/functions/.env.example`을 보고 `--env-file <파일>`로 넘김(없으면 해당 함수만 `NOT_CONFIGURED`). 확인 예:
 - 토큰 없이 `POST http://127.0.0.1:28321/functions/v1/place-search` → 401 `AUTH_REQUIRED`
 
-서버가 Edge를 부르는 시험(스위치 `edge`/`shadow`/`server` 경우 시험 등)은 **이 단계를 먼저** 해 둘 것 — 꺼져 있으면 Edge 호출이 실패함. 로컬 토큰으로 함수 안까지 부르는 확인은 `dev/local_stack.py`의 `_local_user_token`(시험 계정 로그인)을 쓰는 코드로 함. 토큰을 화면에 찍는 명령은 일부러 만들지 않았고, 시험 계정 여러 명 · 시드가 필요한 계약 시험(1-12)에서 정식 도구로 뺄 예정임.
+서버가 Edge를 부르는 시험(스위치 `edge`/`shadow`/`server` 경우 시험 등)은 **이 단계를 먼저** 해 둘 것 — 꺼져 있으면 Edge 호출이 실패함. 로컬 토큰으로 함수 안까지 부르는 확인은 `dev/local_stack.py`의 `_local_user_token`(시험 계정 로그인)을 쓰는 코드로 함. 토큰을 화면에 찍는 명령은 일부러 만들지 않았고, 시험 계정 여러 명 · 시드가 필요한 계약 시험(Edge와 서버 결과 대조)은 `dev/contract/`에 있음 — 사용법은 `dev/contract/README.md`.
 
 **8. 끝내기**
 ```bash
