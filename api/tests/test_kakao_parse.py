@@ -407,7 +407,7 @@ def test_reverse_call_uses_x_longitude_y_latitude_and_key_header_and_none_when_n
     assert run_reverse(ok({"documents": []}), lat=0, lng=0) is None
 
 
-# ---------- 실패는 종류별 KakaoError로 (오류 글에 좌표 · 검색어가 없음) ----------
+# ---------- 실패는 종류별 KakaoError로 (로그 · 오류 본문에 값이 없음은 test_places.py가 HTTP 수준에서 봄) ----------
 
 
 @pytest.mark.parametrize(
@@ -423,9 +423,6 @@ def test_failure_kinds_by_status(status, kind):
         with pytest.raises(KakaoError) as info:
             call()
         assert info.value.kind == kind
-        assert "37.55" not in str(info.value) and "세종대" not in str(
-            info.value
-        )  # 좌표 · 검색어는 오류 글에 없음
 
 
 def test_failure_kinds_for_timeout_connection_and_broken_body():
