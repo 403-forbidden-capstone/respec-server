@@ -5,14 +5,14 @@ from datetime import UTC, datetime, timedelta
 import httpx
 from app.shared.plan_core import PlanDraft, compute_plan, to_suggestion
 from app.shared.survey_pure_prep import (
-    BASELINE, MIN_HISTORY, completed_history, pure_profile_candidate, request_v2,
+    BASELINE,
+    MIN_HISTORY,
+    completed_history,
+    pure_profile_candidate,
+    request_v2,
 )
-from tests.shared.test_plan_core import base, dest
 from tests.shared.plan_helpers import api, kst
-from app.shared.commit import CommitCtx, persist_appointment
-from tests.fake_db import FakeDb
-from app.shared.calc.prepare import prepare_stats_of
-from app.shared.plan_core import PlanInputs
+from tests.shared.test_plan_core import base, dest
 
 
 def candidate(minutes=35):
