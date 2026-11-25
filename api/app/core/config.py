@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     prepare_ml_api_token: SecretStr | None = None
     # OFF by default: only a single explicitly approved research user's AUTO
     # alarm may use survey-proxy cross-domain pure-preparation inference.
+    # Separately gated before any profile-based pure-preparation changes the
+    # existing wake-to-departure scheduling. Both default to OFF.
+    pure_prep_apply_enabled: bool = False
+    pure_prep_allowed_user_id: str | None = None
     pure_prep_survey_enabled: bool = False
     pure_prep_survey_allowed_user_id: str | None = None
 
