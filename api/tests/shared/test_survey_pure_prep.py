@@ -118,10 +118,12 @@ def test_request_v2_provenance_and_fallback():
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
             good = await request_v2(http, "https://model.example.org/ml", "testing-only", payload)
+            internal = await request_v2(http, "http://prepare-ml:8091", "testing-only", payload)
             blocked = await request_v2(http, "http://public.example.org/ml", "testing-only", payload)
-            return good, blocked
+            blocked_host = await request_v2(http, "http://prepare-ml:8092", "testing-only", payload)
+            return good, internal, blocked, blocked_host
 
-    assert asyncio.run(run()) == (27, None)
+    assert asyncio.run(run()) == (27, 27, None, None)
 
 
 def test_survey_pure_prep_preview_and_commit_persist_separate_duration():
