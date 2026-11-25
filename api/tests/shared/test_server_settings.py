@@ -351,7 +351,6 @@ def test_plan_calls_the_ml_server_when_every_condition_holds(monkeypatch):
     assert seen[0].headers["x-api-key"] == "tok"
 
 
-
 # New pure-preparation rollout uses separate, explicit UUID allowlists.
 # Legacy C1/W4 authorization must not implicitly allow these users.
 def test_pure_prep_multi_allowlist_is_independent_and_defaults_off():
