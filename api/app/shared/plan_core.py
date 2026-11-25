@@ -128,6 +128,7 @@ class PlanDraft(ParticipantFields, AlarmFields):
     travel_minutes: float | None = None  # 정해진 이동시간 — 직접 입력하거나 앱이 확인 시트에서 보여 준 값
     travel_source: str | None = None  # 'API' | 'MANUAL'
     prepare_minutes: float | None = None  # 정해진 준비 시간(기상 ~ 출발)
+    new_group_id: str | None = None  # reject pure prep on new group plans
 
 
 @dataclass
@@ -141,6 +142,7 @@ class PlanInputs:
     participant: ParticipantRow | None = None
     late_count4w: int = 0  # lateCount4w
     same_day_wake: bool = False
+    pure_prep_candidate: dict[str, Any] | None = None
     ml_prediction: Any = (
         None  # MlPrediction(model, minutes) — 검증된 프로필일 때만 조회. 없으면 기존 P80 계산 유지
     )
@@ -434,6 +436,7 @@ class Plan:
     departure: datetime
     check: Any  # CheckResult
     warnings: list[dict[str, Any]]
+    prepare_target: str = "WAKE_TO_DEPART"
 
 
 # 어느 쪽에서 부르는지 — preview = alarm-suggest(저장하지 않음), save = alarm-commit(저장). 계산은 같고 경고 문구만 다름
@@ -494,7 +497,17 @@ def compute_plan(i: PlanInputs, travel: Any, mode: str = "save") -> Plan:
         # C1/W4가 적용돼도 직접 지정한 준비시간과 그날 두 번째 일정(기상 없음)은 기존 규칙이 우선.
         # 기존 DTO 필드(commonP80/correction)는 화면 호환을 위해 유지. MODEL일 때 correction은
         # 기존 공통 기준 대비 모델값 차이이며 개인 P80 보정으로 해석하면 안 됨.
-        ml = i.ml_prediction if with_wake and i.draft.prepare_minutes is None else None
+        # Pure duration = preparation START to departure, unlike C1/W4.
+        pure = i.pure_prep_candidate
+        has_manual_time = bool(manual_times.get("WAKE") or manual_times.get("PREPARE"))
+        has_legacy_manual = bool(
+            i.participant and i.participant.get("prepare_value_source") == "MANUAL"
+        )
+        use_pure = (
+            pure is not None and i.draft.prepare_minutes is None and
+            not has_manual_time and not has_legacy_manual
+        )
+        ml = i.ml_prediction if with_wake and not use_pure and i.draft.prepare_minutes is None else None
         if ml:
             predicted: PrepareBasis = {
                 **fallback,
@@ -509,10 +522,27 @@ def compute_plan(i: PlanInputs, travel: Any, mode: str = "save") -> Plan:
             }
         else:
             predicted = fallback
+        if use_pure:
+            # Convert pure minutes to legacy total exactly once for the
+            # existing wake->departure chain. Never add wake-prep to model input.
+            total = round(pure["minutes"] + (before_prepare_minutes if with_wake else 0))
+            predicted = {
+                **fallback,
+                "minutes": total,
+                "autoMinutes": total,
+                "correction": total - fallback["commonP80"],
+                "residualP80": 0,
+                "weight": 0,
+                "sampleCount": pure.get("sampleCount", 0),
+                "source": "MODEL" if pure["source"] == "MODEL" else "DEFAULT",
+                "confidence": "LOW",
+                **({"mlModel": pure["model"]} if pure["source"] == "MODEL" else {}),
+            }
         prepare = (
-            clamp_prepare_to_bound(predicted, i.prepare_bound) if i.prepare_bound and with_wake else predicted
+            clamp_prepare_to_bound(predicted, i.prepare_bound)
+            if i.prepare_bound and with_wake and not use_pure else predicted
         )
-        return before_prepare_minutes, prepare
+        return before_prepare_minutes, prepare, use_pure
 
     manual_times = resolve_manual_times(i.draft.manual_times, i.existing_alarms)
     time_zone = safe_time_zone(i.profile.get("timezone"))
@@ -537,7 +567,7 @@ def compute_plan(i: PlanInputs, travel: Any, mode: str = "save") -> Plan:
         if is_evening_wake(from_ms(ms(depart) - int(derived[1]["minutes"] * 60_000)), time_zone, basics.at):
             with_wake = False
             derived = derive(False)
-    before_prepare_minutes, prepare = derived
+    before_prepare_minutes, prepare, pure_applied = derived
 
     # 잠귀(profiles.wake_sensitivity): 무거움(HEAVY)이면 강, 가벼움 · 보통은 기본 보통 (D69)
     wake_sensitivity = wake_sensitivity_of(i.profile.get("wake_sensitivity"))
@@ -582,7 +612,8 @@ def compute_plan(i: PlanInputs, travel: Any, mode: str = "save") -> Plan:
         travel=travel,
         travel_minutes=chosen_minutes,
         prepare=prepare,
-        recent_prepare=recent_prepare_of(i.stats) if with_wake else [],
+        prepare_target="PREPARE_START_TO_DEPART" if pure_applied else "WAKE_TO_DEPART",
+        recent_prepare=recent_prepare_of(i.stats) if with_wake and not pure_applied else [],
         intensity=intensity,
         kinds=kinds,
         manual_times=manual_times,
