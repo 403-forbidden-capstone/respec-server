@@ -113,7 +113,7 @@ async def pure_prep_candidate(
             .lt("departed_at",cutoff.isoformat()))
         if since:
             query=query.gte("prepare_started_at",since.isoformat())
-        result=await query.order("departed_at",desc=True).limit(100)
+        result=await query.order("departed_at",ascending=False).limit(100)
         if result.error or not isinstance(result.data,list):
             return base
         history=completed_history(result.data,cutoff,since)
