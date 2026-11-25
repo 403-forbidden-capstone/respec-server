@@ -488,14 +488,18 @@ async def build_plan(
     # older C1/W4 whole morning window. Prefer the user's explicitly saved
     # pure-preparation expectation; a survey proxy is optional and gated.
     personal = draft.new_group_id is None and (appointment is None or appointment.get("group_id") is None)
-    # Rollout does NOT start merely because a user has saved a new profile
-    # value. Keep current production alarms unchanged until a single explicitly
-    # authorized account enables pure-prep scheduling.
+    # Distinct allowlist from the existing legacy C1/W4 experiment.
+    # Never enable a user merely because an app profile contains a preference.
+    pure_config = (await predict_settings()).settings if personal else None
     pure_enabled = bool(
         personal
-        and ctx.settings
-        and ctx.settings.pure_prep_apply_enabled
-        and ctx.settings.pure_prep_allowed_user_id == ctx.user_id
+        and pure_config
+        and may_use_ml(
+            enabled=pure_config.pure_prep_apply_enabled,
+            allow_for_plan=True,
+            user_id=ctx.user_id,
+            allowed_user_ids=pure_config.pure_prep_allowed_user_ids,
+        )
     )
     if pure_enabled:
         inputs.pure_prep_candidate = await pure_prep_candidate(
@@ -507,8 +511,17 @@ async def build_plan(
             timezone=time_zone,
             settings=ctx.settings,
             http=ctx.http,
-            allow_model=allow_ml
-            and not (participant and participant.get("prepare_value_source") == "MANUAL"),
+            allow_model=bool(
+                allow_ml
+                and pure_config
+                and may_use_ml(
+                    enabled=pure_config.pure_prep_survey_enabled,
+                    allow_for_plan=True,
+                    user_id=ctx.user_id,
+                    allowed_user_ids=pure_config.pure_prep_survey_allowed_user_ids,
+                )
+                and not (participant and participant.get("prepare_value_source") == "MANUAL")
+            ),
         )
     # Never silently substitute legacy wake->departure model when a pure
     # preparation input is present. Historical fallback stays in plan_core.

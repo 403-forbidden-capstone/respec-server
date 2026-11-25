@@ -125,8 +125,7 @@ async def pure_prep_candidate(
     if (
         not allow_model
         or not settings
-        or settings.pure_prep_survey_enabled is not True
-        or not (_UUID.fullmatch(user_id) and settings.pure_prep_survey_allowed_user_id == user_id)
+        or not _UUID.fullmatch(user_id)
         or not profile.get("ml_profile_consented_at")
     ):
         return base

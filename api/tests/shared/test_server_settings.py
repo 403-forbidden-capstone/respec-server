@@ -349,3 +349,49 @@ def test_plan_calls_the_ml_server_when_every_condition_holds(monkeypatch):
     result = asyncio.run(go())
     assert result is not None and result["minutes"] == 55 and len(seen) == 1
     assert seen[0].headers["x-api-key"] == "tok"
+
+
+# New pure-preparation rollout uses separate, explicit UUID allowlists.
+# Legacy C1/W4 authorization must not implicitly allow these users.
+def test_pure_prep_multi_allowlist_is_independent_and_defaults_off():
+    from app.shared.prepare_ml import may_use_ml
+
+    ids = f"{UUID_A},{UUID_B}"
+    settings = parse_rows(
+        {
+            **ON,
+            "pure_prep_apply_enabled": "1",
+            "pure_prep_allowed_user_ids": ids,
+            "pure_prep_survey_enabled": "1",
+            "pure_prep_survey_allowed_user_ids": ids,
+        }
+    )
+    assert settings.pure_prep_apply_enabled
+    assert settings.pure_prep_survey_enabled
+    for user in (UUID_A, UUID_B):
+        assert may_use_ml(
+            enabled=settings.pure_prep_apply_enabled,
+            allow_for_plan=True,
+            user_id=user,
+            allowed_user_ids=settings.pure_prep_allowed_user_ids,
+        )
+        assert may_use_ml(
+            enabled=settings.pure_prep_survey_enabled,
+            allow_for_plan=True,
+            user_id=user,
+            allowed_user_ids=settings.pure_prep_survey_allowed_user_ids,
+        )
+    assert not may_use_ml(
+        enabled=settings.pure_prep_apply_enabled,
+        allow_for_plan=True,
+        user_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        allowed_user_ids=settings.pure_prep_allowed_user_ids,
+    )
+    assert not parse_rows(ON).pure_prep_apply_enabled
+    assert not parse_rows(ON).pure_prep_survey_enabled
+    assert not parse_rows(
+        {
+            "pure_prep_apply_enabled": "1",
+            "pure_prep_allowed_user_ids": "",
+        }
+    ).pure_prep_allowed_user_ids

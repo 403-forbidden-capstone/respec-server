@@ -28,7 +28,15 @@ from .supabase import create_service_client
 log = logging.getLogger("respec.server_settings")
 
 TABLE = "server_settings"
-KEYS = ("prepare_ml_enabled", "prepare_ml_allowed_user_ids", "prepare_ml_codebook_version")
+KEYS = (
+    "prepare_ml_enabled",
+    "prepare_ml_allowed_user_ids",
+    "prepare_ml_codebook_version",
+    "pure_prep_apply_enabled",
+    "pure_prep_allowed_user_ids",
+    "pure_prep_survey_enabled",
+    "pure_prep_survey_allowed_user_ids",
+)
 CACHE_SECONDS = 30.0  # 표를 바꾼 뒤 서버가 이 시간 안에 읽음 (/health/deep 결과 캐시 5초를 더해도 1분 안)
 RETRY_SECONDS = 10.0  # 읽기에 실패한 뒤 다시 시도하기까지
 
@@ -40,6 +48,11 @@ class PredictSettings:
     enabled: bool = False
     allowed_user_ids: str | None = None  # 원문(쉼표로 이은 UUID) — may_use_ml이 읽음
     codebook_version: str | None = None  # 앞뒤 공백을 지운 판 이름, 비면 None
+    # Independent, server-owned allowlists. All new switches default OFF.
+    pure_prep_apply_enabled: bool = False
+    pure_prep_allowed_user_ids: str | None = None
+    pure_prep_survey_enabled: bool = False
+    pure_prep_survey_allowed_user_ids: str | None = None
 
     @property
     def allowed_count(self) -> int:
@@ -67,11 +80,16 @@ def parse_rows(rows: dict[str, str]) -> PredictSettings:
         enabled=(rows.get("prepare_ml_enabled") or "").strip() == "1",
         allowed_user_ids=allowed if allowed and allowed.strip() else None,
         codebook_version=(rows.get("prepare_ml_codebook_version") or "").strip() or None,
+        pure_prep_apply_enabled=(rows.get("pure_prep_apply_enabled") or "").strip() == "1",
+        pure_prep_allowed_user_ids=(rows.get("pure_prep_allowed_user_ids") or "").strip() or None,
+        pure_prep_survey_enabled=(rows.get("pure_prep_survey_enabled") or "").strip() == "1",
+        pure_prep_survey_allowed_user_ids=(rows.get("pure_prep_survey_allowed_user_ids") or "").strip()
+        or None,
     )
 
 
 async def read_table() -> dict[str, str]:
-    """표의 3줄을 한 번에 (서비스 클라이언트). 실패는 SettingsReadError(코드만)"""
+    """표의 허용된 설정 줄을 한 번에 읽음. 실패는 SettingsReadError(코드만)"""
     result = await create_service_client().from_(TABLE).select("key, value")
     if result.error:
         raise SettingsReadError(str((result.error or {}).get("code") or "UNKNOWN"))
@@ -139,7 +157,7 @@ _cache = SettingsCache()
 
 
 async def predict_settings() -> SettingsRead:
-    """예측 켜기 조건 3개 (캐시). plan.py와 /health/deep이 부름"""
+    """ML와 순수준비시간용 allowlist 플래그를 캐시해 전달함."""
     return await _cache.get()
 
 
