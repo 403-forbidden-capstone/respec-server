@@ -75,7 +75,7 @@ async def request_v2(client: httpx.AsyncClient, endpoint: str, token: str, reque
         if not (5 <= minutes <= 240 and 0.5 <= ratio <= 2 and abs(minutes-v*ratio)<=2):
             return None
         return round(minutes)
-    except (Exception,):
+    except Exception:
         return None
 
 
