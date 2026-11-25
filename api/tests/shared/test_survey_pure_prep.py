@@ -135,7 +135,8 @@ def test_survey_pure_prep_preview_and_commit_persist_separate_duration():
     assert plan.prepare["minutes"] == 55
     response = asyncio.run(persist_appointment(env.ctx, **args))
     participant = next(
-        p for p in env.db.rows("appointment_participants")
+        p
+        for p in env.db.rows("appointment_participants")
         if p["participant_id"] == response["participant_id"]
     )
     assert participant["prepare_minutes"] == 55
