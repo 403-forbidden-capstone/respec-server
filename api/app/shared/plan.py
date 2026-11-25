@@ -488,7 +488,14 @@ async def build_plan(
     # older C1/W4 whole morning window. Prefer the user's explicitly saved
     # pure-preparation expectation; a survey proxy is optional and gated.
     personal = draft.new_group_id is None and (appointment is None or appointment.get("group_id") is None)
-    if personal:
+    # Rollout does NOT start merely because a user has saved a new profile
+    # value. Keep current production alarms unchanged until a single explicitly
+    # authorized account enables pure-prep scheduling.
+    pure_enabled = bool(
+        personal and ctx.settings and ctx.settings.pure_prep_apply_enabled
+        and ctx.settings.pure_prep_allowed_user_id == ctx.user_id
+    )
+    if pure_enabled:
         inputs.pure_prep_candidate = await pure_prep_candidate(
             db=ctx.db,
             user_id=ctx.user_id,
