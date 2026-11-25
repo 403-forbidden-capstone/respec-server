@@ -104,12 +104,6 @@ async def pure_prep_candidate(
         if since and (since.tzinfo is None or since > now):
             return base
         cutoff=min(now,appointment_at)
-        query=(db.from_("appointment_participants")
-            .select("prepare_started_at, departed_at, prepare_started_source, departed_source")
-            .eq("user_id",user_id)
-            .eq("prepare_started_source","PREPARE_ALARM")
-            .eq("departed_source","LOCATION")
-            .not_.is_("prepare_started_at",None) if False else None)
         # PostgREST Python client exposed through the project Db abstraction.
         query=(db.from_("appointment_participants")
             .select("prepare_started_at, departed_at, prepare_started_source, departed_source")
