@@ -39,8 +39,8 @@ from .prepare_ml import (
 )
 from .route import ResolvedTravel, TravelChoice, TravelDeps, resolve_travel
 from .server_settings import predict_settings
-from .survey_pure_prep import pure_prep_candidate
 from .supabase import Db, create_service_client
+from .survey_pure_prep import pure_prep_candidate
 from .tz import local_day_range, safe_time_zone
 
 log = logging.getLogger("respec.plan")
