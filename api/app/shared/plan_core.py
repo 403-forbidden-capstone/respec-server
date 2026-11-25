@@ -775,6 +775,11 @@ def to_suggestion(plan: Plan, inputs: PlanInputs | None = None) -> dict[str, Any
             "corrected_by": None,  # 7.3.1 개인 이동 보정은 아직 없음
         },
         "prepare": {
+            "target": plan.prepare_target,
+            "pure_minutes": (
+                round(prepare["minutes"] - (plan.before_prepare_minutes if plan.with_wake else 0))
+                if plan.prepare_target == "PREPARE_START_TO_DEPART" else None
+            ),
             "minutes": prepare["minutes"],
             "auto_minutes": prepare["autoMinutes"],
             "source": prepare["source"],
