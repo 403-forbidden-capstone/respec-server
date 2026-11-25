@@ -40,6 +40,7 @@ from .prepare_ml import (
 from .route import ResolvedTravel, TravelChoice, TravelDeps, resolve_travel
 from .server_settings import predict_settings
 from .supabase import Db, create_service_client
+from .survey_pure_prep import pure_prep_candidate
 from .tz import local_day_range, safe_time_zone
 
 log = logging.getLogger("respec.plan")
@@ -67,6 +68,9 @@ DEFAULT_PROFILE: dict[str, Any] = {
     "home_lat": None,
     "home_lng": None,
     "default_prepare_minutes": None,
+    "default_outing_prep_minutes": None,
+    "default_outing_prep_updated_at": None,
+    "ml_profile_consented_at": None,
     "wake_sensitivity": "NORMAL",
     "wake_margin": "NORMAL",
 }
@@ -90,7 +94,9 @@ async def load_profile(db: Db, user_id: str) -> dict[str, Any]:
         await db.from_("profiles")
         .select(
             "timezone, default_buffer_minutes, default_transport, home_name, home_lat, home_lng, "
-            "default_prepare_minutes, wake_sensitivity, wake_margin"
+            "default_prepare_minutes, default_outing_prep_minutes, "
+            "default_outing_prep_updated_at, ml_profile_consented_at, "
+            "wake_sensitivity, wake_margin"
         )
         .eq("user_id", user_id)
         .maybe_single(),
@@ -152,7 +158,9 @@ async def load_participant(db: Db, appointment_id: str, user_id: str) -> dict[st
         await db.from_("appointment_participants")
         .select(
             "participant_id, appointment_id, user_id, origin_name, origin_lat, origin_lng, transport_type, "
-            "est_travel_minutes, travel_source, prepare_minutes, buffer_minutes, prepare_advance_minutes"
+            "est_travel_minutes, travel_source, prepare_minutes, prepare_value_source, "
+            "outing_prep_minutes, outing_prep_source, outing_prep_model, "
+            "buffer_minutes, prepare_advance_minutes"
         )
         .eq("appointment_id", appointment_id)
         .eq("user_id", user_id)
@@ -476,7 +484,36 @@ async def build_plan(
         and draft.with_wake is not False
         and not (draft.with_wake is None and same_day_wake)
     )
-    inputs.ml_prediction = await _optional_ml_prediction(ctx, basics.at, time_zone, allow_ml)
+    # Personal AUTO pure preparation uses a different target than the
+    # older C1/W4 whole morning window. Prefer the user's explicitly saved
+    # pure-preparation expectation; a survey proxy is optional and gated.
+    personal = draft.new_group_id is None and (appointment is None or appointment.get("group_id") is None)
+    # Rollout does NOT start merely because a user has saved a new profile
+    # value. Keep current production alarms unchanged until a single explicitly
+    # authorized account enables pure-prep scheduling.
+    pure_enabled = bool(
+        personal
+        and ctx.settings
+        and ctx.settings.pure_prep_apply_enabled
+        and ctx.settings.pure_prep_allowed_user_id == ctx.user_id
+    )
+    if pure_enabled:
+        inputs.pure_prep_candidate = await pure_prep_candidate(
+            db=ctx.db,
+            user_id=ctx.user_id,
+            profile=profile,
+            now=ctx.now,
+            appointment_at=basics.at,
+            timezone=time_zone,
+            settings=ctx.settings,
+            http=ctx.http,
+            allow_model=allow_ml
+            and not (participant and participant.get("prepare_value_source") == "MANUAL"),
+        )
+    # Never silently substitute legacy wake->departure model when a pure
+    # preparation input is present. Historical fallback stays in plan_core.
+    if inputs.pure_prep_candidate is None:
+        inputs.ml_prediction = await _optional_ml_prediction(ctx, basics.at, time_zone, allow_ml)
     return BuiltPlan(
         plan=compute_plan(inputs, travel, "save" if mode is None else mode),
         inputs=inputs,

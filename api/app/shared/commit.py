@@ -251,6 +251,20 @@ async def persist_appointment(
         "prepare_minutes": plan.prepare["minutes"],
         "buffer_minutes": plan.basics.buffer_minutes,
     }
+    # Legacy prepare_minutes is still wake->departure. Persist the distinct
+    # preparation-start->departure quantity only when actually applied.
+    if plan.prepare_target == "PREPARE_START_TO_DEPART" and inputs.pure_prep_candidate:
+        pure = round(plan.prepare["minutes"] - (plan.before_prepare_minutes if plan.with_wake else 0))
+        if 5 <= pure <= 240 and pure == round(inputs.pure_prep_candidate["minutes"]):
+            candidate = inputs.pure_prep_candidate
+            participant_fields.update(
+                {
+                    "outing_prep_minutes": pure,
+                    "outing_prep_source": candidate["source"],
+                    "outing_prep_model": candidate.get("model") if candidate["source"] == "MODEL" else None,
+                    "prepare_value_source": "AUTO",
+                }
+            )
     if inputs.participant:
         participant_id = inputs.participant["participant_id"]
         participant = {"participant_id": participant_id, "is_new": False, "fields": participant_fields}

@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     # 켜는 조건 6가지(켜짐 · UUID 허용 목록 · 코드북 판 = 표 / URL · 토큰 = env / 검증된 프로필 = 서버 전용 표)가 다 맞아야 호출 — 기본은 전부 꺼짐
     prepare_ml_url: str | None = None
     prepare_ml_api_token: SecretStr | None = None
+    # OFF by default: only a single explicitly approved research user's AUTO
+    # alarm may use survey-proxy cross-domain pure-preparation inference.
+    # Separately gated before any profile-based pure-preparation changes the
+    # existing wake-to-departure scheduling. Both default to OFF.
+    pure_prep_apply_enabled: bool = False
+    pure_prep_allowed_user_id: str | None = None
+    pure_prep_survey_enabled: bool = False
+    pure_prep_survey_allowed_user_id: str | None = None
 
     jwt_audience: str = "authenticated"
     jwt_leeway_seconds: int = 10  # 서버 · Supabase 시계 어긋남 허용

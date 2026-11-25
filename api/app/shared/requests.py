@@ -86,6 +86,7 @@ def _read_appointment_draft(r: Reader, *, title_required: bool) -> _Appointment:
     alarm_fields = read_alarm_fields(r)
     draft = PlanDraft(
         appointment_id=appointment_id or None,
+        new_group_id=appointment.group_id if appointment is not None else None,
         at=at or None,
         destination=destination or None,
         importance=importance or None,
