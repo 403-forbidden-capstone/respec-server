@@ -38,7 +38,6 @@ class Settings(BaseSettings):
     pure_prep_survey_enabled: bool = False
     pure_prep_survey_allowed_user_id: str | None = None
 
-
     jwt_audience: str = "authenticated"
     jwt_leeway_seconds: int = 10  # 서버 · Supabase 시계 어긋남 허용
 

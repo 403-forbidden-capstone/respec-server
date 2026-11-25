@@ -487,16 +487,19 @@ async def build_plan(
     # Personal AUTO pure preparation uses a different target than the
     # older C1/W4 whole morning window. Prefer the user's explicitly saved
     # pure-preparation expectation; a survey proxy is optional and gated.
-    personal = draft.new_group_id is None and (
-        appointment is None or appointment.get("group_id") is None
-    )
+    personal = draft.new_group_id is None and (appointment is None or appointment.get("group_id") is None)
     if personal:
         inputs.pure_prep_candidate = await pure_prep_candidate(
-            db=ctx.db, user_id=ctx.user_id, profile=profile, now=ctx.now,
-            appointment_at=basics.at, timezone=time_zone, settings=ctx.settings,
-            http=ctx.http, allow_model=allow_ml and not (
-                participant and participant.get("prepare_value_source") == "MANUAL"
-            ),
+            db=ctx.db,
+            user_id=ctx.user_id,
+            profile=profile,
+            now=ctx.now,
+            appointment_at=basics.at,
+            timezone=time_zone,
+            settings=ctx.settings,
+            http=ctx.http,
+            allow_model=allow_ml
+            and not (participant and participant.get("prepare_value_source") == "MANUAL"),
         )
     # Never silently substitute legacy wake->departure model when a pure
     # preparation input is present. Historical fallback stays in plan_core.

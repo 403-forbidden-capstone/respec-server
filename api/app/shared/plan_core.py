@@ -500,12 +500,12 @@ def compute_plan(i: PlanInputs, travel: Any, mode: str = "save") -> Plan:
         # Pure duration = preparation START to departure, unlike C1/W4.
         pure = i.pure_prep_candidate
         has_manual_time = bool(manual_times.get("WAKE") or manual_times.get("PREPARE"))
-        has_legacy_manual = bool(
-            i.participant and i.participant.get("prepare_value_source") == "MANUAL"
-        )
+        has_legacy_manual = bool(i.participant and i.participant.get("prepare_value_source") == "MANUAL")
         use_pure = (
-            pure is not None and i.draft.prepare_minutes is None and
-            not has_manual_time and not has_legacy_manual
+            pure is not None
+            and i.draft.prepare_minutes is None
+            and not has_manual_time
+            and not has_legacy_manual
         )
         ml = i.ml_prediction if with_wake and not use_pure and i.draft.prepare_minutes is None else None
         if ml:
@@ -540,7 +540,8 @@ def compute_plan(i: PlanInputs, travel: Any, mode: str = "save") -> Plan:
             }
         prepare = (
             clamp_prepare_to_bound(predicted, i.prepare_bound)
-            if i.prepare_bound and with_wake and not use_pure else predicted
+            if i.prepare_bound and with_wake and not use_pure
+            else predicted
         )
         return before_prepare_minutes, prepare, use_pure
 
@@ -778,7 +779,8 @@ def to_suggestion(plan: Plan, inputs: PlanInputs | None = None) -> dict[str, Any
             "target": plan.prepare_target,
             "pure_minutes": (
                 round(prepare["minutes"] - (plan.before_prepare_minutes if plan.with_wake else 0))
-                if plan.prepare_target == "PREPARE_START_TO_DEPART" else None
+                if plan.prepare_target == "PREPARE_START_TO_DEPART"
+                else None
             ),
             "minutes": prepare["minutes"],
             "auto_minutes": prepare["autoMinutes"],
