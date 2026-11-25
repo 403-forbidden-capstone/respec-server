@@ -492,7 +492,9 @@ async def build_plan(
     # value. Keep current production alarms unchanged until a single explicitly
     # authorized account enables pure-prep scheduling.
     pure_enabled = bool(
-        personal and ctx.settings and ctx.settings.pure_prep_apply_enabled
+        personal
+        and ctx.settings
+        and ctx.settings.pure_prep_apply_enabled
         and ctx.settings.pure_prep_allowed_user_id == ctx.user_id
     )
     if pure_enabled:
