@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
+from app.shared.commit import persist_appointment
 from app.shared.plan_core import PlanDraft, compute_plan, to_suggestion
 from app.shared.survey_pure_prep import (
     BASELINE,
@@ -14,6 +15,7 @@ from app.shared.survey_pure_prep import (
     request_v2,
 )
 from tests.shared.plan_helpers import api, kst
+from tests.shared.test_commit import commit_args, new_draft, setup
 from tests.shared.test_plan_core import base, dest
 
 
@@ -120,3 +122,23 @@ def test_request_v2_provenance_and_fallback():
             return good, blocked
 
     assert asyncio.run(run()) == (27, None)
+
+
+def test_survey_pure_prep_preview_and_commit_persist_separate_duration():
+    env = setup()
+    draft = new_draft(prepare_minutes=None, before_prepare_minutes=20)
+    args = commit_args(draft, input_over={"pure_prep_candidate": candidate(35)})
+    plan = args["plan"]
+    preview = compute_plan(args["inputs"], api(50), "preview")
+    assert [a["at"] for a in preview.chain] == [a["at"] for a in plan.chain]
+    assert to_suggestion(preview)["prepare"]["pure_minutes"] == 35
+    assert plan.prepare["minutes"] == 55
+    response = asyncio.run(persist_appointment(env.ctx, **args))
+    participant = next(
+        p for p in env.db.rows("appointment_participants")
+        if p["participant_id"] == response["participant_id"]
+    )
+    assert participant["prepare_minutes"] == 55
+    assert participant["outing_prep_minutes"] == 35
+    assert participant["outing_prep_source"] == "MODEL"
+    assert participant["outing_prep_model"] == "prep_start_ratio_v2_survey_pilot"
