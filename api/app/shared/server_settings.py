@@ -83,7 +83,8 @@ def parse_rows(rows: dict[str, str]) -> PredictSettings:
         pure_prep_apply_enabled=(rows.get("pure_prep_apply_enabled") or "").strip() == "1",
         pure_prep_allowed_user_ids=(rows.get("pure_prep_allowed_user_ids") or "").strip() or None,
         pure_prep_survey_enabled=(rows.get("pure_prep_survey_enabled") or "").strip() == "1",
-        pure_prep_survey_allowed_user_ids=(rows.get("pure_prep_survey_allowed_user_ids") or "").strip() or None,
+        pure_prep_survey_allowed_user_ids=(rows.get("pure_prep_survey_allowed_user_ids") or "").strip()
+        or None,
     )
 
 
