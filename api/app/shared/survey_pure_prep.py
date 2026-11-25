@@ -59,8 +59,16 @@ def completed_history(
 
 
 async def request_v2(client: httpx.AsyncClient, endpoint: str, token: str, request: dict) -> int | None:
-    if not endpoint.startswith("https://") and not endpoint.startswith(
-        ("http://127.0.0.1:", "http://localhost:")
+    # Existing production API and ML container share a private Docker
+    # network. This exact service URL is permitted without HTTPS because
+    # traffic never exits that network; arbitrary HTTP hosts remain blocked.
+    if not (
+        endpoint.startswith("https://")
+        or endpoint in (
+            "http://prepare-ml:8091",
+            "http://127.0.0.1:8091",
+            "http://localhost:8091",
+        )
     ):
         return None
     try:
