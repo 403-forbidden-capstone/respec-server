@@ -474,7 +474,17 @@ def compute_plan(i: PlanInputs, travel: Any, mode: str = "save") -> Plan:
                 existing_advance,
                 i.participant.get("prepare_minutes") if i.participant else None,
             )
-            before_prepare_minutes = inferred if inferred is not None else DEFAULT_BEFORE_PREPARE_MINUTES
+            # A pure-preparation profile is measured from preparation START
+            # to departure. Do not invent a 20-minute pre-preparation activity
+            # when the user has not explicitly configured one. Legacy plans
+            # still retain their existing default for compatibility.
+            before_prepare_minutes = (
+                inferred
+                if inferred is not None
+                else 0
+                if i.pure_prep_candidate is not None
+                else DEFAULT_BEFORE_PREPARE_MINUTES
+            )
         else:
             before_prepare_minutes = 0
 
