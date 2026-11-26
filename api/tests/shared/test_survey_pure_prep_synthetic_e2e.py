@@ -65,12 +65,20 @@ def history_rows(*, n: int, prior_day: bool = True, bad_record: bool = False) ->
     return out
 
 
-def fake_env(monkeypatch, n=10, *, prior_day=True, consent=True, verified=True, bad_record=False,
-             since=UPDATED, model_status=200, response_target="survey_start_cluster_proxy"):
+def fake_env(
+    monkeypatch,
+    n=10,
+    *,
+    prior_day=True,
+    consent=True,
+    verified=True,
+    bad_record=False,
+    since=UPDATED,
+    model_status=200,
+    response_target="survey_start_cluster_proxy",
+):
     db = FakeDb()
-    db.rows("appointment_participants").extend(
-        history_rows(n=n, prior_day=prior_day, bad_record=bad_record)
-    )
+    db.rows("appointment_participants").extend(history_rows(n=n, prior_day=prior_day, bad_record=bad_record))
     db.rows("prepare_ml_verified_profiles").append(
         {
             "user_id": USER,
@@ -174,9 +182,10 @@ def test_synthetic_exactly_ten_previous_day_records_calls_model_and_preserves_ta
         ("nine_valid_plus_one_bad_source", {"n": 9, "bad_record": True}),
         ("ten_but_consent_missing", {"consent": False}),
         ("ten_but_verified_age_missing", {"verified": False}),
-        ("ten_but_profile_changed_after_last_record", {
-            "since": datetime(2026, 11, 26, 9, tzinfo=KST),
-        }),
+        (
+            "ten_but_profile_changed_after_last_record",
+            {"since": datetime(2026, 11, 26, 9, tzinfo=KST)},
+        ),
         ("ml_pilot_off", {"allow_model": False}),
         ("ml_http_unavailable", {"model_status": 503}),
         ("wrong_training_target", {"response_target": "actual_start_depart"}),
@@ -185,9 +194,7 @@ def test_synthetic_exactly_ten_previous_day_records_calls_model_and_preserves_ta
 def test_synthetic_candidate_falls_back_without_false_model_claim(monkeypatch, scenario, options):
     n = options.get("n", 10)
     kwargs = {k: v for k, v in options.items() if k not in ("n", "allow_model")}
-    choice, calls, _ = candidate_for(
-        monkeypatch, n, allow_model=options.get("allow_model", True), **kwargs
-    )
+    choice, calls, _ = candidate_for(monkeypatch, n, allow_model=options.get("allow_model", True), **kwargs)
     assert choice == {"source": "PROFILE", "minutes": 35}, scenario
     if scenario in {
         "ten_but_no_yesterday",
@@ -233,10 +240,7 @@ def test_synthetic_history_through_plan_preview_commit_and_persist(
     assert preview.before_prepare_minutes == 0
     assert preview.prepare["minutes"] == expect_pure_minutes
 
-    actual = {
-        a["kind"]: a["at"].astimezone(KST).strftime("%H:%M")
-        for a in preview.chain
-    }
+    actual = {a["kind"]: a["at"].astimezone(KST).strftime("%H:%M") for a in preview.chain}
     assert actual["DEPARTURE"] == "09:40"
     assert actual["WAKE"] == ("09:05" if records == 9 else "09:14")
 
@@ -246,7 +250,8 @@ def test_synthetic_history_through_plan_preview_commit_and_persist(
     )
     response = asyncio.run(persist_appointment(env.ctx, **args))
     participant = next(
-        p for p in env.db.rows("appointment_participants")
+        p
+        for p in env.db.rows("appointment_participants")
         if p["participant_id"] == response["participant_id"]
     )
     assert participant["user_id"] == USER
@@ -260,6 +265,6 @@ def test_synthetic_history_through_plan_preview_commit_and_persist(
         if a["participant_id"] == response["participant_id"]
     }
     for alarm in saved_plan.chain:
-        assert actual_saved[alarm["kind"]] == alarm["at"].astimezone(
-            ZoneInfo("UTC")
-        ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        assert actual_saved[alarm["kind"]] == alarm["at"].astimezone(ZoneInfo("UTC")).isoformat(
+            timespec="milliseconds"
+        ).replace("+00:00", "Z")
